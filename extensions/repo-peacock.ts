@@ -1118,7 +1118,11 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Discover bundled themes ──────────────────────────────────────────
 
-	pi.on("resources_discover", () => ({ themePaths: [THEMES_DIR] }));
+	pi.on("resources_discover", async () => {
+		const globalThemesDir = path.join(os.homedir(), ".pi", "agent", "themes");
+		if (THEMES_DIR === globalThemesDir) return undefined;
+		return { themePaths: [THEMES_DIR] };
+	});
 
 	// ── Lifecycle hooks ──────────────────────────────────────────────────
 
