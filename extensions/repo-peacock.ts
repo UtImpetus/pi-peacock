@@ -492,9 +492,13 @@ interface LineWidthOption {
 }
 
 const LINE_WIDTHS: LineWidthOption[] = [
-	{ label: "thin", char: "─", width: 1 },
-	{ label: "medium", char: "┄", width: 2 },
-	{ label: "thick", char: "━", width: 3 },
+	{ label: "dot", char: "·", width: 1 },
+	{ label: "thin", char: "─", width: 2 },
+	{ label: "dash", char: "┄", width: 3 },
+	{ label: "hdash", char: "┅", width: 4 },
+	{ label: "thick", char: "━", width: 5 },
+	{ label: "block", char: "▬", width: 6 },
+	{ label: "solid", char: "█", width: 7 },
 ];
 
 /**
@@ -535,7 +539,7 @@ async function showSettingsPanel(
 		let lineColorIdx = Math.max(0,
 			LINE_COLORS.indexOf((overrides.footerLineColor ?? "muted") as any));
 		let lineWidthIdx = Math.max(0,
-			LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 1)));
+			LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 2)));
 
 		function clampFocus() {
 			if (!footerLineOn()) {
