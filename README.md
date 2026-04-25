@@ -58,8 +58,14 @@ It does **not** try to recolor your terminal application's native window chrome,
 - `peacock-blue`
 - `peacock-cyan`
 - `peacock-green`
+- `peacock-lime`
+- `peacock-orange`
+- `peacock-pink`
 - `peacock-purple`
+- `peacock-red`
 - `peacock-rose`
+- `peacock-sky`
+- `peacock-teal`
 
 These themes are tuned for dark terminals and make border/accent differences obvious without being overly noisy.
 

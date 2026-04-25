@@ -44,8 +44,14 @@ const AUTO_THEMES = [
 	"peacock-blue",
 	"peacock-cyan",
 	"peacock-green",
+	"peacock-lime",
+	"peacock-orange",
+	"peacock-pink",
 	"peacock-purple",
+	"peacock-red",
 	"peacock-rose",
+	"peacock-sky",
+	"peacock-teal",
 ] as const;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
