@@ -529,10 +529,13 @@ async function showSettingsPanel(
 	currentIdentity: ResolvedIdentity,
 	repo: RepoInfo,
 	onChange: (overrides: RuntimeOverrides) => void,
-): Promise<string | undefined> {
-	await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
+): Promise<void> {
+	await ctx.ui.custom((tui, theme, _kb, done) => {
 		// ── Shared state ────────────────────────────────────────────────
-		let page: "settings" | "emoji" = "settings";
+		let page: "settings" | "emoji" | "labelEdit" = "settings";
+		// Label edit state
+		let labelBuffer = "";
+		let labelCursor = 0;
 
 		// Settings page state
 		let overrides = { ...currentOverrides };
@@ -596,9 +599,8 @@ async function showSettingsPanel(
 			const lines: string[] = [];
 			const add = (s: string) => lines.push(truncateToWidth(s, width));
 
-			if (page === "emoji") {
-				return renderEmojiPage(lines, add, width);
-			}
+			if (page === "emoji") return renderEmojiPage(lines, add, width);
+			if (page === "labelEdit") return renderLabelEditPage(lines, add, width);
 			return renderSettingsPage(lines, add, width);
 		}
 
@@ -719,11 +721,67 @@ async function showSettingsPanel(
 			return lines;
 		}
 
+		function renderLabelEditPage(lines: string[], add: (s: string) => void, _width: number): string[] {
+			add(theme.fg("accent", theme.bold(" ── Edit label ──")));
+			lines.push("");
+			add(theme.fg("dim", "   Rename the repo badge shown in the footer:"));
+			lines.push("");
+			const before = labelBuffer.slice(0, labelCursor);
+			const after = labelBuffer.slice(labelCursor);
+			add("  " + theme.fg("accent", before) + theme.fg("success", "▁") + theme.fg("accent", after));
+			lines.push("");
+			add(theme.fg("dim", " Type text  ·  Enter confirm  ·  Esc cancel  ·  Backspace delete"));
+			return lines;
+		}
+
 		// ── Input handling ────────────────────────────────────────────────
 
 		function handleInput(data: string) {
 			if (page === "emoji") { handleEmojiInput(data); return; }
+			if (page === "labelEdit") { handleLabelEditInput(data); return; }
 			handleSettingsInput(data);
+		}
+
+		function handleLabelEditInput(data: string) {
+			// Backspace: DEL (0x7f) or BS (0x08)
+			if (data === String.fromCharCode(0x7f) || data === String.fromCharCode(0x08)) {
+				if (labelCursor > 0) {
+					labelBuffer = labelBuffer.slice(0, labelCursor - 1) + labelBuffer.slice(labelCursor);
+					labelCursor--;
+					refresh();
+				}
+				return;
+			}
+			// Confirm
+			if (matchesKey(data, Key.enter)) {
+				const trimmed = labelBuffer.trim();
+				if (trimmed) overrides.label = trimmed;
+				onChange(overrides); saveOverrides(pi, overrides);
+				labelText = overrides.label ?? labelText;
+				page = "settings"; refresh();
+				return;
+			}
+			// Cancel
+			if (matchesKey(data, Key.escape)) {
+				page = "settings"; refresh();
+				return;
+			}
+			// Cursor left
+			if (matchesKey(data, Key.left)) {
+				labelCursor = Math.max(0, labelCursor - 1); refresh(); return;
+			}
+			// Cursor right
+			if (matchesKey(data, Key.right)) {
+				labelCursor = Math.min(labelBuffer.length, labelCursor + 1); refresh(); return;
+			}
+			// Ignore control characters (tabs, arrows, etc.)
+			if (data.length === 1 && data.charCodeAt(0) < 0x20) return;
+			if (data.startsWith(String.fromCharCode(0x1b))) return; // escape sequences
+			if (data) {
+				labelBuffer = labelBuffer.slice(0, labelCursor) + data + labelBuffer.slice(labelCursor);
+				labelCursor += data.length;
+				refresh();
+			}
 		}
 
 		function handleSettingsInput(data: string) {
@@ -777,9 +835,10 @@ async function showSettingsPanel(
 			}
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 				if (focusIndex === 1) {
-					// Signal caller to open label editor
-					onChange(overrides); saveOverrides(pi, overrides);
-					done("label");
+					labelBuffer = overrides.label ?? labelText;
+					labelCursor = labelBuffer.length;
+					page = "labelEdit";
+					refresh();
 					return;
 				}
 				if (focusIndex === 2) {
@@ -817,11 +876,11 @@ async function showSettingsPanel(
 					return;
 				}
 				if (focusIndex === 9) {
-					onChange(overrides); saveOverrides(pi, overrides); done(undefined);
+					onChange(overrides); saveOverrides(pi, overrides); done();
 					return;
 				}
 				if (focusIndex === 10) {
-					done(undefined);
+					done();
 					return;
 				}
 			}
@@ -1026,38 +1085,21 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function cmdEmoji(_args: string, ctx: ExtensionContext): Promise<void> {
-		await openSettingsLoop(ctx);
+		const repo = await getRepoInfo(ctx.cwd);
+		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
+		const identity = resolveIdentity(repo, config, runtimeOverrides);
+		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
+			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
+		saveOverrides(pi, runtimeOverrides);
+		await applyIdentity(ctx, true);
 	}
 
 	async function showFullSettings(ctx: ExtensionContext): Promise<void> {
-		await openSettingsLoop(ctx);
-	}
-
-	/** Open settings panel, handling signals like "label" editing */
-	async function openSettingsLoop(ctx: ExtensionContext): Promise<void> {
-		let action: string | undefined;
-		do {
-			const repo = await getRepoInfo(ctx.cwd);
-			const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
-			const identity = resolveIdentity(repo, config, runtimeOverrides);
-
-			action = await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
-				(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-
-			if (action === "label") {
-				const input = await ctx.ui.input(
-					"Set peacock label:",
-					runtimeOverrides.label ?? identity.label,
-				);
-				if (input) {
-					runtimeOverrides.label = input;
-					saveOverrides(pi, runtimeOverrides);
-					await applyIdentity(ctx, true);
-				}
-				// Loop back to settings panel
-			}
-		} while (action === "label");
-
+		const repo = await getRepoInfo(ctx.cwd);
+		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
+		const identity = resolveIdentity(repo, config, runtimeOverrides);
+		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
+			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
 		saveOverrides(pi, runtimeOverrides);
 		await applyIdentity(ctx, true);
 	}
