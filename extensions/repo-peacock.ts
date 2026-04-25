@@ -18,7 +18,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path, { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,7 @@ const execFileAsync = promisify(execFile);
 // Resolve themes directory relative to this extension file
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const THEMES_DIR = path.resolve(EXTENSION_DIR, "..", "themes");
+const OVERRIDES_FILE = path.join(os.homedir(), ".pi", "agent", ".peacock-state.json");
 
 const STATUS_KEY = "pi-peacock";
 const STATE_KEY = "pi-peacock-state";
@@ -348,38 +349,53 @@ function getSignature(
 	});
 }
 
-// ─── Session State Persistence ───────────────────────────────────────────────
+// ─── Dual-persistence state ─────────────────────────────────────────────────
 
 function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides): void {
 	pi.appendEntry(STATE_KEY, overrides);
+	// Fire-and-forget disk write so overrides survive new sessions
+	writeFile(OVERRIDES_FILE, JSON.stringify(overrides, null, 2), "utf8").catch(() => {
+		/* disk write suppressed */
+	});
 }
 
-function restoreOverrides(
+async function restoreOverrides(
 	ctx: ExtensionContext,
-	reportedErrors: Set<string>,
-): RuntimeOverrides {
+	_reportedErrors: Set<string>,
+): Promise<RuntimeOverrides> {
+	// 1. Try session entries (most recent for current session)
 	const stateEntry = [...ctx.sessionManager.getBranch()]
 		.reverse()
-		.find(
-			(e) => e.type === "custom" && e.customType === STATE_KEY,
-		);
+		.find((e) => e.type === "custom" && e.customType === STATE_KEY);
 
 	const data = stateEntry?.data as RuntimeOverrides | undefined;
 	if (data) {
-		// Normalize: remove undefined keys
-		const cleaned: RuntimeOverrides = {};
-		if (data.theme) cleaned.theme = data.theme;
-		if (data.label) cleaned.label = data.label;
-		if (data.emoji) cleaned.emoji = data.emoji;
-		if (data.footerLine !== undefined) cleaned.footerLine = data.footerLine;
-		if (data.footerLineColor) cleaned.footerLineColor = data.footerLineColor;
-		if (data.footerLineWidth !== undefined) cleaned.footerLineWidth = data.footerLineWidth;
-		if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
-		if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
-		if (data.showTitle !== undefined) cleaned.showTitle = data.showTitle;
-		return cleaned;
+		const cleaned = normalizeOverrides(data);
+		if (Object.keys(cleaned).length > 0) return cleaned;
 	}
+
+	// 2. Fall back to disk file (survives new sessions)
+	try {
+		const content = await readFile(OVERRIDES_FILE, "utf8");
+		const parsed = JSON.parse(content) as RuntimeOverrides | undefined;
+		if (parsed) return normalizeOverrides(parsed);
+	} catch { /* file missing or unreadable */ }
+
 	return {};
+}
+
+function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
+	const cleaned: RuntimeOverrides = {};
+	if (data.theme) cleaned.theme = data.theme;
+	if (data.label) cleaned.label = data.label;
+	if (data.emoji) cleaned.emoji = data.emoji;
+	if (data.footerLine !== undefined) cleaned.footerLine = data.footerLine;
+	if (data.footerLineColor) cleaned.footerLineColor = data.footerLineColor;
+	if (data.footerLineWidth !== undefined) cleaned.footerLineWidth = data.footerLineWidth;
+	if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
+	if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
+	if (data.showTitle !== undefined) cleaned.showTitle = data.showTitle;
+	return cleaned;
 }
 
 // ─── Interactive Settings UI ─────────────────────────────────────────────────
@@ -1107,13 +1123,13 @@ export default function (pi: ExtensionAPI) {
 	// ── Lifecycle hooks ──────────────────────────────────────────────────
 
 	pi.on("session_start", async (_e, ctx) => {
-		runtimeOverrides = restoreOverrides(ctx, reportedConfigErrors);
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
 
 	pi.on("session_tree", async (_e, ctx) => {
-		runtimeOverrides = restoreOverrides(ctx, reportedConfigErrors);
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
