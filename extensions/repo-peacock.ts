@@ -73,6 +73,7 @@ type PeacockConfig = {
 type RuntimeOverrides = {
 	theme?: string;
 	label?: string;
+	emoji?: string;
 	showStatus?: boolean;
 	showBranch?: boolean;
 	showTitle?: boolean;
@@ -291,10 +292,12 @@ function getStatusText(
 	repo: RepoInfo,
 	identity: ResolvedIdentity,
 	flags: { showStatus: boolean; showBranch: boolean },
+	emojiOverride?: string,
 ): string | undefined {
 	if (!flags.showStatus) return undefined;
 
-	const badge = ctx.ui.theme.fg("accent", `🦚 ${identity.label}`);
+	const badgeEmoji = emojiOverride ?? "🦚";
+	const badge = ctx.ui.theme.fg("accent", `${badgeEmoji} ${identity.label}`);
 	const branch =
 		flags.showBranch && repo.branch
 			? ctx.ui.theme.fg("dim", ` · ${repo.branch}`)
@@ -357,6 +360,7 @@ function restoreOverrides(
 		const cleaned: RuntimeOverrides = {};
 		if (data.theme) cleaned.theme = data.theme;
 		if (data.label) cleaned.label = data.label;
+		if (data.emoji) cleaned.emoji = data.emoji;
 		if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
 		if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
 		if (data.showTitle !== undefined) cleaned.showTitle = data.showTitle;
@@ -371,12 +375,135 @@ const SUBCOMMANDS = [
 	"theme",
 	"label",
 	"toggle",
+	"emoji",
 	"reset",
 	"status",
 ] as const;
 
+// ─── Emoji Unicode ranges ──────────────────────────────────────────────────────
+
+interface EmojiRange {
+	name: string;
+	ranges: [number, number][];
+}
+
+const EMOJI_CATEGORIES: EmojiRange[] = [
+	{
+		name: "Smileys",
+		ranges: [[0x1f600, 0x1f64f]],
+	},
+	{
+		name: "Gestures",
+		ranges: [[0x1f9b0, 0x1f9ff]],
+	},
+	{
+		name: "People",
+		ranges: [[0x1f300, 0x1f3ff]],
+	},
+	{
+		name: "Animals",
+		ranges: [[0x1f400, 0x1f4ff]],
+	},
+	{
+		name: "Food",
+		ranges: [[0x1f32d, 0x1f37f]],
+	},
+	{
+		name: "Travel",
+		ranges: [[0x1f680, 0x1f6ff]],
+	},
+	{
+		name: "Activities",
+		ranges: [[0x1f3a0, 0x1f3ff]],
+	},
+	{
+		name: "Objects",
+		ranges: [[0x1f4a0, 0x1f5ff]],
+	},
+	{
+		name: "Symbols",
+		ranges: [
+			[0x2600, 0x26ff],
+			[0x2700, 0x27bf],
+			[0x2300, 0x23ff],
+			[0x2934, 0x2935],
+			[0x2b05, 0x2b55],
+			[0x3030, 0x303d],
+			[0x3297, 0x3299],
+		],
+	},
+	{
+		name: "Flags",
+		ranges: [[0x1f1e6, 0x1f1ff]],
+	},
+];
+
+function getAllEmojiRanges(): [number, number][] {
+	const all: [number, number][] = [];
+	for (const cat of EMOJI_CATEGORIES) {
+		for (const r of cat.ranges) all.push(r);
+	}
+	return all;
+}
+
+const ALL_EMOJI_PAGES: EmojiRange[] = [
+	{ name: "All", ranges: getAllEmojiRanges() },
+	...EMOJI_CATEGORIES,
+];
+
+function generateEmoji(ranges: [number, number][]): string[] {
+	const result: string[] = [];
+	const seen = new Set<number>();
+	for (const [start, end] of ranges) {
+		for (let cp = start; cp <= end; cp++) {
+			if (seen.has(cp)) continue;
+			seen.add(cp);
+			if (cp >= 0xfe00 && cp <= 0xfe0f) continue;  // variation selectors
+			if (cp === 0x200d || cp === 0x200b || cp === 0xfeff) continue;
+			try {
+				result.push(String.fromCodePoint(cp));
+			} catch { /* skip invalid */ }
+		}
+	}
+	return result;
+}
+
+const EMOJI_PAGE_GRIDS: string[][] = ALL_EMOJI_PAGES.map((cat) =>
+	generateEmoji(cat.ranges),
+);
+
+async function copyEmoji(text: string): Promise<void> {
+	const platform = os.platform();
+	try {
+		if (platform === "darwin") {
+			const proc = execFile("pbcopy", []);
+			if (proc.stdin) { proc.stdin.end(text); }
+			await new Promise<void>((resolve, reject) => {
+				proc.on("exit", (c) => (c === 0 ? resolve() : reject()));
+				proc.on("error", reject);
+			});
+			return;
+		}
+		if (platform === "linux") {
+			try { await execFileAsync("wl-copy", [text]); return; } catch {}
+			try { await execFileAsync("xclip", ["-selection", "clipboard"], { input: text }); return; } catch {}
+			try { await execFileAsync("xsel", ["-b", "-i"], { input: text }); return; } catch {}
+			return;
+		}
+		if (platform === "win32") {
+			const proc = execFile("clip", []);
+			if (proc.stdin) { proc.stdin.end(text); }
+			await new Promise<void>((resolve, reject) => {
+				proc.on("exit", (c) => (c === 0 ? resolve() : reject()));
+				proc.on("error", reject);
+			});
+		}
+	} catch { /* clipboard not available */ }
+}
+
 /**
  * Interactive settings panel — replaces editor temporarily with a full TUI.
+ * Supports two pages: "settings" (main) and "emoji" (emoji picker).
  */
 async function showSettingsPanel(
 	pi: ExtensionAPI,
@@ -388,7 +515,10 @@ async function showSettingsPanel(
 	onChange: (overrides: RuntimeOverrides) => void,
 ): Promise<void> {
 	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-		// Local mutable copies
+		// ── Shared state ────────────────────────────────────────────────
+		let page: "settings" | "emoji" = "settings";
+
+		// Settings page state
 		let overrides = { ...currentOverrides };
 		const availableThemes = [...AUTO_THEMES];
 		let selectedThemeIdx = overrides.theme
@@ -400,15 +530,30 @@ async function showSettingsPanel(
 		const flags = mergeFlags(currentConfig, overrides);
 		let labelText = overrides.label ?? currentIdentity.label;
 
-		// UI state
-		let focusIndex = 0; // 0=theme, 1=label, 2=status, 3=branch, 4=title, 5=save, 6=cancel
-		const totalOptions = 7;
+		// Settings focus: 0=theme, 1=label, 2=status, 3=branch, 4=title, 5=emoji, 6=save, 7=cancel
+		const TOTAL_SETTINGS_OPTIONS = 8;
+		let focusIndex = 0;
+
+		// Emoji picker state
+		let emojiCategoryIdx = 0;
+		let emojiCursorIdx = 0;
+		const emojiCols = 8;
+
+		// ── Helpers ──────────────────────────────────────────────────────
 
 		function getThemeName(): string {
 			return availableThemes[selectedThemeIdx] ?? currentIdentity.theme;
 		}
 
-		
+		function currentEmojiList(): string[] {
+			return EMOJI_PAGE_GRIDS[emojiCategoryIdx] ?? [];
+		}
+
+		function emojiTotalRows(): number {
+			return Math.ceil(currentEmojiList().length / emojiCols);
+		}
+
+		// ── Rendering ────────────────────────────────────────────────────
 
 		let cachedLines: string[] | undefined;
 		function refresh() {
@@ -416,89 +561,19 @@ async function showSettingsPanel(
 			tui.requestRender();
 		}
 
-		function handleInput(data: string) {
-			if (matchesKey(data, Key.up)) {
-				focusIndex = (focusIndex - 1 + totalOptions) % totalOptions;
-				refresh();
-				return;
-			}
-			if (matchesKey(data, Key.down)) {
-				focusIndex = (focusIndex + 1) % totalOptions;
-				refresh();
-				return;
-			}
-			if (matchesKey(data, Key.left)) {
-				if (focusIndex === 0) {
-					// Navigate themes left
-					selectedThemeIdx =
-						(selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
-					overrides.theme = availableThemes[selectedThemeIdx];
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					refresh();
-				}
-				return;
-			}
-			if (matchesKey(data, Key.right)) {
-				if (focusIndex === 0) {
-					selectedThemeIdx = (selectedThemeIdx + 1) % availableThemes.length;
-					overrides.theme = availableThemes[selectedThemeIdx];
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					refresh();
-				}
-				return;
-			}
-			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
-				if (focusIndex === 2) {
-					// Toggle status
-					flags.showStatus = !flags.showStatus;
-					overrides.showStatus = flags.showStatus;
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					refresh();
-					return;
-				}
-				if (focusIndex === 3) {
-					flags.showBranch = !flags.showBranch;
-					overrides.showBranch = flags.showBranch;
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					refresh();
-					return;
-				}
-				if (focusIndex === 4) {
-					flags.showTitle = !flags.showTitle;
-					overrides.showTitle = flags.showTitle;
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					refresh();
-					return;
-				}
-				if (focusIndex === 5) {
-					// Save & apply
-					onChange(overrides);
-					saveOverrides(pi, overrides);
-					done();
-					return;
-				}
-				if (focusIndex === 6) {
-					// Cancel
-					done();
-					return;
-				}
-			}
-			if (matchesKey(data, Key.escape)) {
-				done();
-				return;
-			}
-		}
-
 		function render(width: number): string[] {
 			if (cachedLines) return cachedLines;
 			const lines: string[] = [];
 			const add = (s: string) => lines.push(truncateToWidth(s, width));
 
+			if (page === "emoji") {
+				return renderEmojiPage(lines, add, width);
+			}
+
+			return renderSettingsPage(lines, add, width);
+		}
+
+		function renderSettingsPage(lines: string[], add: (s: string) => void, width: number): string[] {
 			const sel = (idx: number, text: string) =>
 				focusIndex === idx
 					? theme.fg("accent", `▸ ${text}`)
@@ -523,7 +598,6 @@ async function showSettingsPanel(
 				`${themePrefix} ${theme.fg("dim", "Theme:")}  ${themeSwatch} ${themeHighlight}` +
 					(isThemeFocused ? theme.fg("dim", "  ← → browse") : ""),
 			);
-			// Show mini theme palette
 			add(
 				`   ${theme.fg("dim", availableThemes.map((t) => {
 					const isActive = t === themeName;
@@ -536,55 +610,288 @@ async function showSettingsPanel(
 			add(`${focusIndex === 1 ? theme.fg("accent", `▸ ${theme.fg("dim", "Label:")}  ${labelText}`) : `  ${theme.fg("dim", "Label:")}  ${labelText}`}`);
 			lines.push("");
 
-			// 3-5. Toggles with interactive enter/space
+			// 3–5. Toggles
 			const toggleStates = [flags.showStatus, flags.showBranch, flags.showTitle];
 			const toggleLabels = ["Status badge", "Branch name", "Terminal title"];
 			for (let i = 0; i < 3; i++) {
 				const idx = i + 2;
 				const checked = toggleStates[i];
 				const checkChar = checked ? theme.fg("success", "☑") : theme.fg("dim", "☐");
-				const label = toggleLabels[i];
 				const focused = focusIndex === idx;
 				add(
 					(focused ? theme.fg("accent", "▸") : " ") +
-						` ${checkChar} ${label}` +
+						` ${checkChar} ${toggleLabels[i]}` +
 						(focused ? theme.fg("dim", "  Enter/space to toggle") : ""),
 				);
 			}
 			lines.push("");
 
+			// 6. Emoji badge option
+			const currentEmoji = overrides.emoji ?? "🦚";
+			add(
+				(focusIndex === 5 ? theme.fg("accent", "▸") : " ") +
+					` ${theme.fg("dim", "Emoji badge:")}  ${currentEmoji}` +
+					(focusIndex === 5 ? theme.fg("dim", "  Enter to pick") : ""),
+			);
+			lines.push("");
+
 			// Preview section
 			add(theme.fg("dim", " ── Preview ──"));
-			const previewFlags = { showStatus: flags.showStatus, showBranch: flags.showBranch, showTitle: flags.showTitle };
 			const previewLabel = overrides.label ?? labelText;
-			const preview = theme.fg("accent", `🦚 ${previewLabel}`);
-			const branchText = previewFlags.showBranch && repo.branch ? theme.fg("dim", ` · ${repo.branch}`) : "";
+			const preview = theme.fg("accent", `${currentEmoji} ${previewLabel}`);
+			const branchText = flags.showBranch && repo.branch ? theme.fg("dim", ` · ${repo.branch}`) : "";
 			add(`   ${preview}${branchText}`);
-			if (previewFlags.showTitle) {
+			if (flags.showTitle) {
 				const prefix = currentConfig.titlePrefix ?? DEFAULT_CONFIG.titlePrefix;
-				add(`   ${theme.fg("dim", `Title: ${prefix} ${previewLabel}${previewFlags.showBranch && repo.branch ? ` · ${repo.branch}` : ""}`)}`);
+				add(`   ${theme.fg("dim", `Title: ${prefix} ${previewLabel}${flags.showBranch && repo.branch ? ` · ${repo.branch}` : ""}`)}`);
 			}
 			lines.push("");
 
-			// Actions: Save / Cancel
-			add(
-				sel(5, theme.fg("success", "✓ Apply & close")),
-			);
-			add(
-				sel(6, theme.fg("muted", "✕ Cancel")),
-			);
+			// Actions: Emoji / Save / Cancel
+			add(sel(6, theme.fg("success", "✓ Apply & close")));
+			add(sel(7, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
-			cachedLines = lines;
 			return lines;
+		}
+
+		function renderEmojiPage(lines: string[], add: (s: string) => void, width: number): string[] {
+			add(theme.fg("accent", theme.bold(" ── pick an emoji for the footer badge ──")));
+			lines.push("");
+
+			// Category tabs
+			const tabParts: string[] = [];
+			for (let i = 0; i < ALL_EMOJI_PAGES.length; i++) {
+				const name = ALL_EMOJI_PAGES[i].name;
+				if (i === emojiCategoryIdx) {
+					tabParts.push(theme.fg("accent", `[${name}]`));
+				} else {
+					tabParts.push(theme.fg("dim", name));
+				}
+			}
+			add(tabParts.join("  "));
+			lines.push("");
+
+			// Emoji grid
+			const emoji = currentEmojiList();
+			if (emoji.length === 0) {
+				add(theme.fg("muted", "  (no emoji in this category)"));
+			} else {
+				const totalEmoji = emoji.length;
+				const totalRows = emojiTotalRows();
+				const visibleRows = Math.min(8, totalRows);
+				const cursorRow = Math.floor(emojiCursorIdx / emojiCols);
+				const startRow = Math.max(0, Math.min(cursorRow - Math.floor(visibleRows / 2), totalRows - visibleRows));
+				const endRow = Math.min(startRow + visibleRows, totalRows);
+
+				for (let row = startRow; row < endRow; row++) {
+					let rowText = "";
+					for (let col = 0; col < emojiCols; col++) {
+						const idx = row * emojiCols + col;
+						if (idx >= totalEmoji) {
+							rowText += "  ";
+							continue;
+						}
+						const char = emoji[idx];
+						const isCursor = idx === emojiCursorIdx;
+						rowText += isCursor
+							? theme.fg("accent", `[${char}]`)
+							: ` ${char} `;
+					}
+					add(rowText);
+				}
+
+				// Scroll indicator
+				if (totalRows > visibleRows) {
+					const scrollPct = Math.round((startRow / Math.max(1, totalRows - visibleRows)) * 100);
+					add(theme.fg("dim", `  ${cursorRow + 1}/${totalRows} rows  ·  ${totalEmoji} emoji  ·  ${scrollPct}%`));
+				}
+			}
+
+			lines.push("");
+			add(theme.fg("dim", " ← → cats  ·  ↑↓←→ grid  ·  Enter pick  ·  Tab/1-9 jump  ·  Esc back"));
+
+			return lines;
+		}
+
+		// ── Input handling ────────────────────────────────────────────────
+
+		function handleInput(data: string) {
+			if (page === "emoji") {
+				handleEmojiInput(data);
+				return;
+			}
+			handleSettingsInput(data);
+		}
+
+		function handleSettingsInput(data: string) {
+			if (matchesKey(data, Key.up)) {
+				focusIndex = (focusIndex - 1 + TOTAL_SETTINGS_OPTIONS) % TOTAL_SETTINGS_OPTIONS;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				focusIndex = (focusIndex + 1) % TOTAL_SETTINGS_OPTIONS;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.left)) {
+				if (focusIndex === 0) {
+					selectedThemeIdx = (selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
+					overrides.theme = availableThemes[selectedThemeIdx];
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					refresh();
+				}
+				return;
+			}
+			if (matchesKey(data, Key.right)) {
+				if (focusIndex === 0) {
+					selectedThemeIdx = (selectedThemeIdx + 1) % availableThemes.length;
+					overrides.theme = availableThemes[selectedThemeIdx];
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					refresh();
+				}
+				return;
+			}
+			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+				if (focusIndex === 2) {
+					flags.showStatus = !flags.showStatus;
+					overrides.showStatus = flags.showStatus;
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					refresh();
+					return;
+				}
+				if (focusIndex === 3) {
+					flags.showBranch = !flags.showBranch;
+					overrides.showBranch = flags.showBranch;
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					refresh();
+					return;
+				}
+				if (focusIndex === 4) {
+					flags.showTitle = !flags.showTitle;
+					overrides.showTitle = flags.showTitle;
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					refresh();
+					return;
+				}
+				if (focusIndex === 5) {
+					// Switch to emoji picker
+					page = "emoji";
+					emojiCategoryIdx = 0;
+					emojiCursorIdx = 0;
+					refresh();
+					return;
+				}
+				if (focusIndex === 6) {
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					done();
+					return;
+				}
+				if (focusIndex === 7) {
+					done();
+					return;
+				}
+			}
+			if (matchesKey(data, Key.escape)) {
+				done();
+				return;
+			}
+		}
+
+		function handleEmojiInput(data: string) {
+			const emoji = currentEmojiList();
+			const totalEmoji = emoji.length;
+			const totalRows = emojiTotalRows();
+
+			if (matchesKey(data, Key.left)) {
+				if (emojiCursorIdx > 0) emojiCursorIdx--;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.right)) {
+				if (emojiCursorIdx < totalEmoji - 1) emojiCursorIdx++;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.up)) {
+				emojiCursorIdx = Math.max(0, emojiCursorIdx - emojiCols);
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.down)) {
+				emojiCursorIdx = Math.min(totalEmoji - 1, emojiCursorIdx + emojiCols);
+				refresh();
+				return;
+			}
+			// Tab/S-tab: cycle categories
+			if (matchesKey(data, "tab")) {
+				emojiCategoryIdx = (emojiCategoryIdx + 1) % ALL_EMOJI_PAGES.length;
+				emojiCursorIdx = 0;
+				refresh();
+				return;
+			}
+			if (matchesKey(data, "shift+tab")) {
+				emojiCategoryIdx = (emojiCategoryIdx - 1 + ALL_EMOJI_PAGES.length) % ALL_EMOJI_PAGES.length;
+				emojiCursorIdx = 0;
+				refresh();
+				return;
+			}
+			// Enter/Space: pick emoji
+			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+				if (totalEmoji > 0 && emojiCursorIdx < totalEmoji) {
+					overrides.emoji = emoji[emojiCursorIdx];
+					onChange(overrides);
+					saveOverrides(pi, overrides);
+					// Copy to clipboard (fire-and-forget)
+					copyEmoji(emoji[emojiCursorIdx]);
+					// Return to settings page
+					page = "settings";
+					focusIndex = 5;
+					refresh();
+				}
+				return;
+			}
+			// Escape: back to settings
+			if (matchesKey(data, Key.escape)) {
+				page = "settings";
+				refresh();
+				return;
+			}
+			// Number keys for category jump
+			const num = Number.parseInt(data, 10);
+			if (!Number.isNaN(num) && num >= 1 && num <= ALL_EMOJI_PAGES.length) {
+				emojiCategoryIdx = num - 1;
+				emojiCursorIdx = 0;
+				refresh();
+				return;
+			}
+			// First-letter jump
+			const letter = data.toLowerCase();
+			if (/^[a-z]$/.test(letter)) {
+				const startIdx = (emojiCategoryIdx + 1) % ALL_EMOJI_PAGES.length;
+				for (let i = 0; i < ALL_EMOJI_PAGES.length; i++) {
+					const idx = (startIdx + i) % ALL_EMOJI_PAGES.length;
+					if (ALL_EMOJI_PAGES[idx].name.toLowerCase().startsWith(letter)) {
+						emojiCategoryIdx = idx;
+						emojiCursorIdx = 0;
+						refresh();
+						return;
+					}
+				}
+			}
 		}
 
 		return {
 			render,
-			invalidate: () => {
-				cachedLines = undefined;
-			},
+			invalidate: () => { cachedLines = undefined; },
 			handleInput,
 		};
 	});
@@ -631,7 +938,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Status badge
-		const statusText = getStatusText(ctx, repo, identity, flags);
+		const statusText = getStatusText(ctx, repo, identity, flags, runtimeOverrides.emoji);
 		if (statusText) {
 			ctx.ui.setStatus(STATUS_KEY, statusText);
 		} else {
@@ -802,6 +1109,34 @@ export default function (pi: ExtensionAPI) {
 		);
 	}
 
+	async function cmdEmoji(
+		_args: string,
+		ctx: ExtensionContext,
+	): Promise<void> {
+		const repo = await getRepoInfo(ctx.cwd);
+		const { config } = await loadConfig(
+			repo,
+			reportedConfigErrors,
+			(msg: string) => ctx.ui.notify(msg, "warning"),
+		);
+		const identity = resolveIdentity(repo, config, runtimeOverrides);
+
+		await showSettingsPanel(
+			pi,
+			ctx,
+			runtimeOverrides,
+			config,
+			identity,
+			repo,
+			(newOverrides) => {
+				runtimeOverrides = newOverrides;
+				applyIdentity(ctx, true).catch(() => {});
+			},
+		);
+		saveOverrides(pi, runtimeOverrides);
+		await applyIdentity(ctx, true);
+	}
+
 	async function showFullSettings(ctx: ExtensionContext): Promise<void> {
 		const repo = await getRepoInfo(ctx.cwd);
 		const { config } = await loadConfig(
@@ -896,7 +1231,10 @@ export default function (pi: ExtensionAPI) {
 				case "toggle":
 					await cmdToggle(subArgs, ctx);
 					break;
-				case "reset":
+				case "emoji":
+				await cmdEmoji(subArgs, ctx);
+				break;
+			case "reset":
 					await cmdReset(subArgs, ctx);
 					break;
 				case "status":
@@ -913,6 +1251,7 @@ export default function (pi: ExtensionAPI) {
 	const SUBCOMMAND_DESCS: Record<string, string> = {
 		theme: "Switch theme (e.g. /peacock theme peacock-amber)",
 		label: "Set a custom label (e.g. /peacock label backend)",
+		emoji: "Pick an emoji for the footer badge",
 		toggle: "Toggle a feature: status, branch, or title",
 		reset: "Clear all runtime overrides, revert to file config",
 		status: "Show current identity info",
