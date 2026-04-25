@@ -967,32 +967,26 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(`pi-peacock: theme '${identity.theme}' not found`, "warning");
 		}
 
-		// Footer: status badge + optional horizontal line
+		// Footer: status badge + optional horizontal line ABOVE footer
 		const hasLine = runtimeOverrides.footerLine && flags.showStatus;
 		const badgeText = getStatusText(ctx, repo, identity, flags, runtimeOverrides.emoji);
 
-		if (hasLine) {
+		if (badgeText) {
+			ctx.ui.setStatus(STATUS_KEY, badgeText);
+		} else {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
+		}
+
+		if (hasLine) {
 			const lineColor = runtimeOverrides.footerLineColor ?? "muted";
 			const lineThickness = runtimeOverrides.footerLineWidth ?? 1;
 			const lineOpt = LINE_WIDTHS.find((w) => w.width === lineThickness) ?? LINE_WIDTHS[0];
-
-			ctx.ui.setFooter((_tui, theme) => ({
-				render(width: number) {
-					return [
-						theme.fg(lineColor as any, lineOpt.char.repeat(width)),
-						badgeText ?? "",
-					];
-				},
-				invalidate() {},
-			}));
-		} else if (flags.showStatus) {
-			ctx.ui.setFooter(undefined);
-			if (badgeText) ctx.ui.setStatus(STATUS_KEY, badgeText);
-			else ctx.ui.setStatus(STATUS_KEY, undefined);
+			ctx.ui.setWidget("pi-peacock-line",
+				(tui, th) => { return { render: (w: number) => [th.fg(lineColor as any, lineOpt.char.repeat(w))], invalidate() {} }; },
+				{ placement: "belowEditor" },
+			);
 		} else {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-			ctx.ui.setFooter(undefined);
+			ctx.ui.setWidget("pi-peacock-line", undefined);
 		}
 
 		// Terminal title
@@ -1186,6 +1180,6 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_e, ctx) => {
 		ctx.ui.setStatus(STATUS_KEY, undefined);
-		ctx.ui.setFooter(undefined);
+		ctx.ui.setWidget("pi-peacock-line", undefined);
 	});
 }
