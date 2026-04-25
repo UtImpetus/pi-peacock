@@ -509,8 +509,8 @@ async function showSettingsPanel(
 	currentIdentity: ResolvedIdentity,
 	repo: RepoInfo,
 	onChange: (overrides: RuntimeOverrides) => void,
-): Promise<void> {
-	await ctx.ui.custom<void>((tui, theme, _kb, done) => {
+): Promise<string | undefined> {
+	await ctx.ui.custom<string | undefined>((tui, theme, _kb, done) => {
 		// ── Shared state ────────────────────────────────────────────────
 		let page: "settings" | "emoji" = "settings";
 
@@ -602,7 +602,8 @@ async function showSettingsPanel(
 			lines.push("");
 
 			// 2. Label
-			add(`${focusIndex === 1 ? theme.fg("accent", `▸ ${theme.fg("dim", "Label:")}  ${labelText}`) : `  ${theme.fg("dim", "Label:")}  ${labelText}`}`);
+			// 2. Label
+			add(`${focusIndex === 1 ? theme.fg("accent", `▸ ${theme.fg("dim", "Label:")}  ${labelText}  ${theme.fg("dim", "Enter to edit")}`) : `  ${theme.fg("dim", "Label:")}  ${labelText}`}`);
 			lines.push("");
 
 			// 3-5. Toggles
@@ -755,6 +756,12 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+				if (focusIndex === 1) {
+					// Signal caller to open label editor
+					onChange(overrides); saveOverrides(pi, overrides);
+					done("label");
+					return;
+				}
 				if (focusIndex === 2) {
 					flags.showStatus = !flags.showStatus;
 					overrides.showStatus = flags.showStatus;
@@ -790,11 +797,11 @@ async function showSettingsPanel(
 					return;
 				}
 				if (focusIndex === 9) {
-					onChange(overrides); saveOverrides(pi, overrides); done();
+					onChange(overrides); saveOverrides(pi, overrides); done(undefined);
 					return;
 				}
 				if (focusIndex === 10) {
-					done();
+					done(undefined);
 					return;
 				}
 			}
@@ -999,21 +1006,38 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function cmdEmoji(_args: string, ctx: ExtensionContext): Promise<void> {
-		const repo = await getRepoInfo(ctx.cwd);
-		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
-		const identity = resolveIdentity(repo, config, runtimeOverrides);
-		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
-			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-		saveOverrides(pi, runtimeOverrides);
-		await applyIdentity(ctx, true);
+		await openSettingsLoop(ctx);
 	}
 
 	async function showFullSettings(ctx: ExtensionContext): Promise<void> {
-		const repo = await getRepoInfo(ctx.cwd);
-		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
-		const identity = resolveIdentity(repo, config, runtimeOverrides);
-		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
-			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
+		await openSettingsLoop(ctx);
+	}
+
+	/** Open settings panel, handling signals like "label" editing */
+	async function openSettingsLoop(ctx: ExtensionContext): Promise<void> {
+		let action: string | undefined;
+		do {
+			const repo = await getRepoInfo(ctx.cwd);
+			const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
+			const identity = resolveIdentity(repo, config, runtimeOverrides);
+
+			action = await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
+				(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
+
+			if (action === "label") {
+				const input = await ctx.ui.input(
+					"Set peacock label:",
+					runtimeOverrides.label ?? identity.label,
+				);
+				if (input) {
+					runtimeOverrides.label = input;
+					saveOverrides(pi, runtimeOverrides);
+					await applyIdentity(ctx, true);
+				}
+				// Loop back to settings panel
+			}
+		} while (action === "label");
+
 		saveOverrides(pi, runtimeOverrides);
 		await applyIdentity(ctx, true);
 	}
