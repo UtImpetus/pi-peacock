@@ -515,6 +515,7 @@ const LINE_WIDTHS: LineWidthOption[] = [
 	{ label: "thick", char: "━", width: 5 },
 	{ label: "block", char: "▬", width: 6 },
 	{ label: "solid", char: "█", width: 7 },
+	{ label: "bek", char: "#", width: 8},
 ];
 
 /**
