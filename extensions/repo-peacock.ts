@@ -35,7 +35,11 @@ const execFileAsync = promisify(execFile);
 // Resolve themes directory relative to this extension file
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const THEMES_DIR = path.resolve(EXTENSION_DIR, "..", "themes");
-const OVERRIDES_FILE = path.join(os.homedir(), ".pi", "agent", ".peacock-state.json");
+const OVERRIDES_DIR = path.join(os.homedir(), ".pi", "agent");
+
+function getOverridesFile(repoName: string): string {
+	return path.join(OVERRIDES_DIR, `.peacock-state-${repoName}.json`);
+}
 
 const STATUS_KEY = "pi-peacock";
 const STATE_KEY = "pi-peacock-state";
@@ -351,10 +355,10 @@ function getSignature(
 
 // ─── Dual-persistence state ─────────────────────────────────────────────────
 
-function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides): void {
+function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides, repoName: string): void {
 	pi.appendEntry(STATE_KEY, overrides);
 	// Fire-and-forget disk write so overrides survive new sessions
-	writeFile(OVERRIDES_FILE, JSON.stringify(overrides, null, 2), "utf8").catch(() => {
+	writeFile(getOverridesFile(repoName), JSON.stringify(overrides, null, 2), "utf8").catch(() => {
 		/* disk write suppressed */
 	});
 }
@@ -362,6 +366,7 @@ function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides): void {
 async function restoreOverrides(
 	ctx: ExtensionContext,
 	_reportedErrors: Set<string>,
+	repoName: string,
 ): Promise<RuntimeOverrides> {
 	// 1. Try session entries (most recent for current session)
 	const stateEntry = [...ctx.sessionManager.getBranch()]
@@ -374,9 +379,9 @@ async function restoreOverrides(
 		if (Object.keys(cleaned).length > 0) return cleaned;
 	}
 
-	// 2. Fall back to disk file (survives new sessions)
+	// 2. Fall back to per-repo disk file (survives new sessions)
 	try {
-		const content = await readFile(OVERRIDES_FILE, "utf8");
+		const content = await readFile(getOverridesFile(repoName), "utf8");
 		const parsed = JSON.parse(content) as RuntimeOverrides | undefined;
 		if (parsed) return normalizeOverrides(parsed);
 	} catch { /* file missing or unreadable */ }
@@ -757,7 +762,7 @@ async function showSettingsPanel(
 			if (matchesKey(data, Key.enter)) {
 				const trimmed = labelBuffer.trim();
 				if (trimmed) overrides.label = trimmed;
-				onChange(overrides); saveOverrides(pi, overrides);
+				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 				labelText = overrides.label ?? labelText;
 				page = "settings"; refresh();
 				return;
@@ -811,7 +816,7 @@ async function showSettingsPanel(
 				}
 				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
 					onChange(overrides);
-					saveOverrides(pi, overrides);
+					saveOverrides(pi, overrides, repo.repoName);
 				}
 				refresh();
 				return;
@@ -829,7 +834,7 @@ async function showSettingsPanel(
 				}
 				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
 					onChange(overrides);
-					saveOverrides(pi, overrides);
+					saveOverrides(pi, overrides, repo.repoName);
 				}
 				refresh();
 				return;
@@ -845,19 +850,19 @@ async function showSettingsPanel(
 				if (focusIndex === 2) {
 					flags.showStatus = !flags.showStatus;
 					overrides.showStatus = flags.showStatus;
-					onChange(overrides); saveOverrides(pi, overrides); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
 				if (focusIndex === 3) {
 					flags.showBranch = !flags.showBranch;
 					overrides.showBranch = flags.showBranch;
-					onChange(overrides); saveOverrides(pi, overrides); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
 				if (focusIndex === 4) {
 					flags.showTitle = !flags.showTitle;
 					overrides.showTitle = flags.showTitle;
-					onChange(overrides); saveOverrides(pi, overrides); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
 				if (focusIndex === 5) {
@@ -866,7 +871,7 @@ async function showSettingsPanel(
 						overrides.footerLineColor = undefined;
 						overrides.footerLineWidth = undefined;
 					}
-					onChange(overrides); saveOverrides(pi, overrides); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
 				if (focusIndex === 8) {
@@ -877,7 +882,7 @@ async function showSettingsPanel(
 					return;
 				}
 				if (focusIndex === 9) {
-					onChange(overrides); saveOverrides(pi, overrides); done();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
 				if (focusIndex === 10) {
@@ -902,7 +907,7 @@ async function showSettingsPanel(
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 				if (total > 0 && emojiCursorIdx < total) {
 					overrides.emoji = emoji[emojiCursorIdx];
-					onChange(overrides); saveOverrides(pi, overrides);
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
 					focusIndex = 8; // back to emoji badge item
@@ -941,6 +946,7 @@ async function showSettingsPanel(
 export default function (pi: ExtensionAPI) {
 	let lastSignature = "";
 	let runtimeOverrides: RuntimeOverrides = {};
+	let currentRepoName = "";
 	const reportedConfigErrors = new Set<string>();
 	const reportedThemeErrors = new Set<string>();
 
@@ -949,6 +955,7 @@ export default function (pi: ExtensionAPI) {
 		force: boolean = false,
 	): Promise<AppliedIdentity> {
 		const repo = await getRepoInfo(ctx.cwd);
+		currentRepoName = repo.repoName;
 		const { config, configPaths } = await loadConfig(
 			repo, reportedConfigErrors,
 			(msg: string) => ctx.ui.notify(msg, "warning"),
@@ -1022,7 +1029,7 @@ export default function (pi: ExtensionAPI) {
 				runtimeOverrides.theme = name;
 			}
 		}
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: theme → ${applied.identity.theme}`, "info");
 	}
@@ -1036,7 +1043,7 @@ export default function (pi: ExtensionAPI) {
 		} else {
 			runtimeOverrides.label = label;
 		}
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: label → ${applied.identity.label}`, "info");
 	}
@@ -1055,7 +1062,7 @@ export default function (pi: ExtensionAPI) {
 			await showFullSettings(ctx);
 			return;
 		}
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: ${feature} → ${runtimeOverrides[validFeatures[feature]] ? "on" : "off"}`, "info");
 	}
@@ -1065,7 +1072,7 @@ export default function (pi: ExtensionAPI) {
 		if (!ok) return;
 		runtimeOverrides = {};
 		lastSignature = "";
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: reset — using ${applied.identity.theme} (${applied.identity.source})`, "info");
 	}
@@ -1085,7 +1092,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
 			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		await applyIdentity(ctx, true);
 	}
 
@@ -1095,7 +1102,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
 			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-		saveOverrides(pi, runtimeOverrides);
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		await applyIdentity(ctx, true);
 	}
 
@@ -1164,13 +1171,17 @@ export default function (pi: ExtensionAPI) {
 	// ── Lifecycle hooks ──────────────────────────────────────────────────
 
 	pi.on("session_start", async (_e, ctx) => {
-		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors);
+		const repo = await getRepoInfo(ctx.cwd);
+		currentRepoName = repo.repoName;
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
 
 	pi.on("session_tree", async (_e, ctx) => {
-		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors);
+		const repo = await getRepoInfo(ctx.cwd);
+		currentRepoName = repo.repoName;
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
