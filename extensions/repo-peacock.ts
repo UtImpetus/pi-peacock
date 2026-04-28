@@ -28,7 +28,7 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,6 +91,7 @@ type RuntimeOverrides = {
 	showTitle?: boolean;
 	footerLine?: boolean;
 	footerLineColor?: string;
+	footerLinePattern?: string;
 	footerLineWidth?: number;
 };
 
@@ -341,9 +342,14 @@ function getSignature(
 	repo: RepoInfo,
 	identity: ResolvedIdentity,
 	flags: { showStatus: boolean; showBranch: boolean; showTitle: boolean },
+	overrides: RuntimeOverrides,
 ): string {
 	return JSON.stringify({
 		branch: repo.branch,
+		footerLine: overrides.footerLine,
+		footerLineColor: overrides.footerLineColor,
+		footerLinePattern: overrides.footerLinePattern,
+		footerLineWidth: overrides.footerLineWidth,
 		label: identity.label,
 		showBranch: flags.showBranch,
 		showStatus: flags.showStatus,
@@ -396,6 +402,8 @@ function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	if (data.emoji) cleaned.emoji = data.emoji;
 	if (data.footerLine !== undefined) cleaned.footerLine = data.footerLine;
 	if (data.footerLineColor) cleaned.footerLineColor = data.footerLineColor;
+	const pattern = sanitizeFooterLinePattern(data.footerLinePattern);
+	if (pattern) cleaned.footerLinePattern = pattern;
 	if (data.footerLineWidth !== undefined) cleaned.footerLineWidth = data.footerLineWidth;
 	if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
 	if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
@@ -523,9 +531,36 @@ const LINE_WIDTHS: LineWidthOption[] = [
 	{ label: "bek", char: "#", width: 8},
 ];
 
+function sanitizeFooterLinePattern(pattern: string | undefined): string | undefined {
+	if (!pattern) return undefined;
+	const cleaned = pattern
+		.replace(/[\x00-\x1f\x7f]/g, "")
+		.trim()
+		.slice(0, 16);
+	if (!cleaned || visibleWidth(cleaned) === 0) return undefined;
+	return cleaned || undefined;
+}
+
+function getLegacyLineChar(width: number | undefined): string {
+	return LINE_WIDTHS.find((w) => w.width === width)?.char ?? LINE_WIDTHS[0].char;
+}
+
+function getFooterLinePattern(overrides: RuntimeOverrides): string {
+	return sanitizeFooterLinePattern(overrides.footerLinePattern) ?? getLegacyLineChar(overrides.footerLineWidth);
+}
+
+function buildFooterLine(pattern: string, width: number): string {
+	const safePattern = sanitizeFooterLinePattern(pattern) ?? LINE_WIDTHS[0].char;
+	let line = "";
+	while (visibleWidth(line) < width) {
+		line += safePattern;
+	}
+	return truncateToWidth(line, width);
+}
+
 /**
  * Interactive settings panel — replaces editor temporarily with a full TUI.
- * Supports two pages: "settings" (main) and "emoji" (emoji picker).
+	 * Supports settings, emoji picker, and inline text editors.
  */
 async function showSettingsPanel(
 	pi: ExtensionAPI,
@@ -538,10 +573,12 @@ async function showSettingsPanel(
 ): Promise<void> {
 	await ctx.ui.custom((tui, theme, _kb, done) => {
 		// ── Shared state ────────────────────────────────────────────────
-		let page: "settings" | "emoji" | "labelEdit" = "settings";
+		let page: "settings" | "emoji" | "labelEdit" | "linePatternEdit" = "settings";
 		// Label edit state
 		let labelBuffer = "";
 		let labelCursor = 0;
+		let linePatternBuffer = "";
+		let linePatternCursor = 0;
 
 		// Settings page state
 		let overrides = { ...currentOverrides };
@@ -557,19 +594,33 @@ async function showSettingsPanel(
 		let labelText = overrides.label ?? currentIdentity.label;
 
 		// Settings focus: 0=theme, 1=label, 2=status, 3=branch, 4=title,
-		//   5=footerLine, 6=lineColor, 7=lineWidth, 8=emoji, 9=save, 10=cancel
-		const TOTAL_SETTINGS_OPTIONS = 11;
+		//   5=footerLine, 6=lineColor, 7=linePreset, 8=lineCustom, 9=emoji, 10=save, 11=cancel
+		const TOTAL_SETTINGS_OPTIONS = 12;
 		let focusIndex = 0;
 		const footerLineOn = () => overrides.footerLine ?? false;
+		let lineWidthIdx = LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 1));
+		if (lineWidthIdx === -1) lineWidthIdx = 0;
 		let lineColorIdx = Math.max(0,
 			LINE_COLORS.indexOf((overrides.footerLineColor ?? "muted") as any));
-		let lineWidthIdx = Math.max(0,
-			LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 2)));
+		const customLinePattern = () => sanitizeFooterLinePattern(overrides.footerLinePattern);
+
+		function isVisibleFocusIndex(index: number): boolean {
+			if (footerLineOn()) return true;
+			return index !== 6 && index !== 7 && index !== 8;
+		}
 
 		function clampFocus() {
 			if (!footerLineOn()) {
-				if (focusIndex === 6 || focusIndex === 7) focusIndex = 5;
+				if (focusIndex === 6 || focusIndex === 7 || focusIndex === 8) focusIndex = 5;
 			}
+		}
+
+		function moveFocus(delta: -1 | 1) {
+			let nextIndex = focusIndex;
+			do {
+				nextIndex = (nextIndex + delta + TOTAL_SETTINGS_OPTIONS) % TOTAL_SETTINGS_OPTIONS;
+			} while (!isVisibleFocusIndex(nextIndex));
+			focusIndex = nextIndex;
 		}
 
 		// Emoji picker state
@@ -607,6 +658,7 @@ async function showSettingsPanel(
 
 			if (page === "emoji") return renderEmojiPage(lines, add, width);
 			if (page === "labelEdit") return renderLabelEditPage(lines, add, width);
+			if (page === "linePatternEdit") return renderLinePatternEditPage(lines, add, width);
 			return renderSettingsPage(lines, add, width);
 		}
 
@@ -651,15 +703,19 @@ async function showSettingsPanel(
 				const lc = LINE_COLORS[lineColorIdx] ?? "muted";
 				const lcSwatch = theme.fg(lc as any, "───");
 				add(`${focusIndex === 6 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${lcSwatch} ${lc}${focusIndex === 6 ? theme.fg("dim", "  ← →") : ""}`);
-				// 8. Line width
+				// 8. Line preset
 				const lw = LINE_WIDTHS[lineWidthIdx] ?? LINE_WIDTHS[0];
-				add(`${focusIndex === 7 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Width:")}  ${lw.char.repeat(5)} ${lw.label}${focusIndex === 7 ? theme.fg("dim", "  ← →") : ""}`);
+				add(`${focusIndex === 7 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Preset:")}  ${lw.char.repeat(5)} ${lw.label}${focusIndex === 7 ? theme.fg("dim", "  ← →") : ""}`);
+				// 9. Custom line pattern
+				const customPattern = customLinePattern();
+				const customText = customPattern ?? theme.fg("muted", "(preset active)");
+				add(`${focusIndex === 8 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customText}${focusIndex === 8 ? theme.fg("dim", "  Enter to edit") : ""}`);
 			}
 			lines.push("");
 
-			// 9. Emoji badge
+			// 10. Emoji badge
 			const curEmoji = overrides.emoji ?? "🦚";
-			add(`${focusIndex === 8 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 8 ? theme.fg("dim", "  Enter to pick") : ""}`);
+			add(`${focusIndex === 9 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 9 ? theme.fg("dim", "  Enter to pick") : ""}`);
 			lines.push("");
 
 			// Preview
@@ -668,15 +724,19 @@ async function showSettingsPanel(
 			const previewBadge = `${curEmoji} ${pl}`;
 			const bt = flags.showBranch && repo.branch ? theme.fg("dim", ` · ${repo.branch}`) : "";
 			add(`   ${theme.fg("accent", previewBadge)}${bt}`);
+			if (footerLineOn()) {
+				const lineColor = overrides.footerLineColor ?? "muted";
+				add(`   ${theme.fg(lineColor as any, buildFooterLine(getFooterLinePattern(overrides), Math.max(8, width - 3)))}`);
+			}
 			if (flags.showTitle) {
 				const pfx = currentConfig.titlePrefix ?? DEFAULT_CONFIG.titlePrefix;
 				add(`   ${theme.fg("dim", `Title: ${pfx} ${pl}${flags.showBranch && repo.branch ? ` · ${repo.branch}` : ""}`)}`);
 			}
 			lines.push("");
 
-			// 10. Apply, 11. Cancel
-			add(sel(9, theme.fg("success", "✓ Apply & close")));
-			add(sel(10, theme.fg("muted", "✕ Cancel")));
+			// 11. Apply, 12. Cancel
+			add(sel(10, theme.fg("success", "✓ Apply & close")));
+			add(sel(11, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
@@ -740,11 +800,26 @@ async function showSettingsPanel(
 			return lines;
 		}
 
+		function renderLinePatternEditPage(lines: string[], add: (s: string) => void, _width: number): string[] {
+			add(theme.fg("accent", theme.bold(" ── Edit footer line pattern ──")));
+			lines.push("");
+			add(theme.fg("dim", "   Repeated to fill the footer line width, e.g. #-# or =="));
+			add(theme.fg("dim", "   Leave empty to fall back to the selected preset."));
+			lines.push("");
+			const before = linePatternBuffer.slice(0, linePatternCursor);
+			const after = linePatternBuffer.slice(linePatternCursor);
+			add("  " + theme.fg("accent", before) + theme.fg("success", "▁") + theme.fg("accent", after));
+			lines.push("");
+			add(theme.fg("dim", " Type text  ·  Enter confirm  ·  Esc cancel  ·  Backspace delete"));
+			return lines;
+		}
+
 		// ── Input handling ────────────────────────────────────────────────
 
 		function handleInput(data: string) {
 			if (page === "emoji") { handleEmojiInput(data); return; }
 			if (page === "labelEdit") { handleLabelEditInput(data); return; }
+			if (page === "linePatternEdit") { handleLinePatternEditInput(data); return; }
 			handleSettingsInput(data);
 		}
 
@@ -790,15 +865,56 @@ async function showSettingsPanel(
 			}
 		}
 
+		function handleLinePatternEditInput(data: string) {
+			if (data === String.fromCharCode(0x7f) || data === String.fromCharCode(0x08)) {
+				if (linePatternCursor > 0) {
+					linePatternBuffer = linePatternBuffer.slice(0, linePatternCursor - 1) + linePatternBuffer.slice(linePatternCursor);
+					linePatternCursor--;
+					refresh();
+				}
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const sanitized = sanitizeFooterLinePattern(linePatternBuffer);
+				if (sanitized) {
+					overrides.footerLinePattern = sanitized;
+				} else {
+					overrides.footerLinePattern = undefined;
+				}
+				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+				page = "settings";
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.escape)) {
+				page = "settings";
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.left)) {
+				linePatternCursor = Math.max(0, linePatternCursor - 1); refresh(); return;
+			}
+			if (matchesKey(data, Key.right)) {
+				linePatternCursor = Math.min(linePatternBuffer.length, linePatternCursor + 1); refresh(); return;
+			}
+			if (data.length === 1 && data.charCodeAt(0) < 0x20) return;
+			if (data.startsWith(String.fromCharCode(0x1b))) return;
+			if (data) {
+				linePatternBuffer = (linePatternBuffer.slice(0, linePatternCursor) + data + linePatternBuffer.slice(linePatternCursor)).slice(0, 16);
+				linePatternCursor = Math.min(linePatternBuffer.length, linePatternCursor + data.length);
+				refresh();
+			}
+		}
+
 		function handleSettingsInput(data: string) {
 			if (matchesKey(data, Key.up)) {
-				focusIndex = (focusIndex - 1 + TOTAL_SETTINGS_OPTIONS) % TOTAL_SETTINGS_OPTIONS;
+				moveFocus(-1);
 				clampFocus();
 				refresh();
 				return;
 			}
 			if (matchesKey(data, Key.down)) {
-				focusIndex = (focusIndex + 1) % TOTAL_SETTINGS_OPTIONS;
+				moveFocus(1);
 				clampFocus();
 				refresh();
 				return;
@@ -813,6 +929,7 @@ async function showSettingsPanel(
 				} else if (focusIndex === 7 && footerLineOn()) {
 					lineWidthIdx = (lineWidthIdx - 1 + LINE_WIDTHS.length) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
+					overrides.footerLinePattern = undefined;
 				}
 				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
 					onChange(overrides);
@@ -831,6 +948,7 @@ async function showSettingsPanel(
 				} else if (focusIndex === 7 && footerLineOn()) {
 					lineWidthIdx = (lineWidthIdx + 1) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
+					overrides.footerLinePattern = undefined;
 				}
 				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
 					onChange(overrides);
@@ -869,23 +987,29 @@ async function showSettingsPanel(
 					overrides.footerLine = !footerLineOn();
 					if (!overrides.footerLine) {
 						overrides.footerLineColor = undefined;
-						overrides.footerLineWidth = undefined;
 					}
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
-				if (focusIndex === 8) {
+				if (focusIndex === 8 && footerLineOn()) {
+					linePatternBuffer = customLinePattern() ?? "";
+					linePatternCursor = linePatternBuffer.length;
+					page = "linePatternEdit";
+					refresh();
+					return;
+				}
+				if (focusIndex === 9) {
 					page = "emoji";
 					emojiCategoryIdx = 0;
 					emojiCursorIdx = 0;
 					refresh();
 					return;
 				}
-				if (focusIndex === 9) {
+				if (focusIndex === 10) {
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
-				if (focusIndex === 10) {
+				if (focusIndex === 11) {
 					done();
 					return;
 				}
@@ -910,7 +1034,7 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
-					focusIndex = 8; // back to emoji badge item
+					focusIndex = 9; // back to emoji badge item
 					refresh();
 				}
 				return;
@@ -962,7 +1086,7 @@ export default function (pi: ExtensionAPI) {
 		);
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		const flags = mergeFlags(config, runtimeOverrides);
-		const signature = getSignature(repo, identity, flags);
+		const signature = getSignature(repo, identity, flags, runtimeOverrides);
 
 		if (!force && signature === lastSignature) {
 			return { configPaths, identity, repo, signature };
@@ -987,10 +1111,9 @@ export default function (pi: ExtensionAPI) {
 
 		if (hasLine) {
 			const lineColor = runtimeOverrides.footerLineColor ?? "muted";
-			const lineThickness = runtimeOverrides.footerLineWidth ?? 1;
-			const lineOpt = LINE_WIDTHS.find((w) => w.width === lineThickness) ?? LINE_WIDTHS[0];
+			const linePattern = getFooterLinePattern(runtimeOverrides);
 			ctx.ui.setWidget("pi-peacock-line",
-				(tui, th) => { return { render: (w: number) => [th.fg(lineColor as any, lineOpt.char.repeat(w))], invalidate() {} }; },
+				(tui, th) => { return { render: (w: number) => [th.fg(lineColor as any, buildFooterLine(linePattern, w))], invalidate() {} }; },
 				{ placement: "belowEditor" },
 			);
 		} else {
