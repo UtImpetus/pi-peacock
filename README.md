@@ -8,7 +8,7 @@ This repository started as a fork of the original [`metmirr/pi-peacock`](https:/
 
 It gives pi a repo identity by:
 
-- switching to a repo-specific theme
+- optionally switching to a repo-specific theme
 - showing a colored repo badge in the footer
 - setting the terminal title to the current repo and branch
 
@@ -47,8 +47,8 @@ It does **not** try to recolor your terminal application's native window chrome,
 
 ## Features
 
-- **automatic repo coloring** with zero config
-- **stable theme assignment** by hashing the git repo name
+- **optional automatic repo coloring** you can enable per repo from `/peacock`
+- **stable theme assignment** by hashing the git repo name when auto-assign is enabled
 - **bundled themes** ready to use out of the box
 - **per-repo overrides** via `peacock.json`
 - **project + global config** support
@@ -110,10 +110,10 @@ You can use `pi-peacock` with **no config at all**.
 Once installed, it will:
 
 1. detect the current git repo
-2. pick one of the bundled themes
-3. apply that theme consistently for that repo
-4. assign a random emoji badge the first time a repo is seen
-5. show repo + branch information in pi's UI
+2. keep your current pi theme unchanged by default
+3. assign a random emoji badge the first time a repo is seen
+4. show repo + branch information in pi's UI
+5. let you enable per-repo auto theme assignment from `/peacock`
 
 If you want fixed mappings, add a config file.
 
@@ -138,6 +138,8 @@ It includes:
 
 Project config overrides global config.
 
+By default, `pi-peacock` preserves your current pi theme. If you want repo-specific theme switching, enable **Auto-assign theme** in `/peacock` or set `autoAssignTheme: true` in config.
+
 ## Minimal config
 
 ```json
@@ -155,7 +157,7 @@ Project config overrides global config.
 
 ```json
 {
-  "autoAssignTheme": true,
+  "autoAssignTheme": false,
   "fallbackTheme": "dark",
   "fallbackLabel": "workspace",
   "showBranch": true,
@@ -204,9 +206,12 @@ Available placeholders in `title` and `status`:
 
 Opens the interactive settings panel by default and can also be used with subcommands.
 
+Inside the settings panel, the bundled theme picker is disabled until you turn on **Auto-assign theme**.
+
 Available subcommands:
 
-- `/peacock theme <name>`
+- `/peacock theme <name>` — requires **Auto-assign theme** to be enabled
+- `/peacock auto-theme <on|off>`
 - `/peacock label <text>`
 - `/peacock toggle <status|branch|title>`
 - `/peacock emoji`
@@ -216,7 +221,7 @@ Available subcommands:
 Useful when:
 
 - you changed config and want to refresh
-- you manually switched themes and want pi-peacock to take over again
+- you enabled auto-assign or a theme override and want pi-peacock to take over again
 - you want to verify which rule matched
 - you want to adjust repo identity without editing config files
 
@@ -254,7 +259,7 @@ The package already includes the `pi-package` keyword so it is ready to be distr
 
 ## Notes
 
-- If no rule matches, `pi-peacock` auto-picks one of the bundled themes.
+- If no rule matches, `pi-peacock` keeps your current pi theme unless auto-assign is enabled.
 - If a repo has no persisted settings yet, `pi-peacock` assigns a random emoji once and then keeps it for that repo.
 - If you switch git branches during a session, the footer/title updates after the current turn.
-- If you manually change theme in pi, `pi-peacock` will re-apply when identity changes or when you run `/peacock`.
+- If auto-assign or a theme override is active and you manually change theme in pi, `pi-peacock` will re-apply when identity changes or when you run `/peacock`.

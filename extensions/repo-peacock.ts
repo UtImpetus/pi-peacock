@@ -83,6 +83,7 @@ type PeacockConfig = {
 
 /** Settings the user can override at runtime via commands/UI */
 type RuntimeOverrides = {
+	autoAssignTheme?: boolean;
 	theme?: string;
 	label?: string;
 	emoji?: string;
@@ -111,7 +112,7 @@ type ResolvedIdentity = {
 	label: string;
 	source: IdentitySource;
 	status?: string;
-	theme: string;
+	theme?: string;
 	title?: string;
 };
 
@@ -125,7 +126,7 @@ type AppliedIdentity = {
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_CONFIG: PeacockConfig = {
-	autoAssignTheme: true,
+	autoAssignTheme: false,
 	showBranch: true,
 	showStatus: true,
 	showTitle: true,
@@ -257,6 +258,39 @@ async function loadConfig(
 
 // ─── Identity Resolution ─────────────────────────────────────────────────────
 
+function isAutoAssignThemeEnabled(
+	config: PeacockConfig,
+	overrides: RuntimeOverrides,
+): boolean {
+	return overrides.autoAssignTheme ?? config.autoAssignTheme ?? DEFAULT_CONFIG.autoAssignTheme ?? false;
+}
+
+function resolveTheme(
+	repo: RepoInfo,
+	config: PeacockConfig,
+	overrides: RuntimeOverrides,
+	matchedRule?: PeacockRule,
+): string | undefined {
+	const autoAssignEnabled = isAutoAssignThemeEnabled(config, overrides);
+	if (autoAssignEnabled && overrides.theme) return overrides.theme;
+	if (matchedRule?.theme) return matchedRule.theme;
+	if (matchedRule) {
+		if (config.fallbackTheme) return config.fallbackTheme;
+		if (autoAssignEnabled) return pickAutoTheme(repo.repoName);
+		return undefined;
+	}
+	if (autoAssignEnabled) return pickAutoTheme(repo.repoName);
+	return config.fallbackTheme;
+}
+
+function formatThemeName(theme: string | undefined): string {
+	return theme ?? "current theme";
+}
+
+function formatThemeValue(theme: string | undefined): string {
+	return theme ?? "(unchanged)";
+}
+
 function resolveIdentity(
 	repo: RepoInfo,
 	config: PeacockConfig,
@@ -269,24 +303,24 @@ function resolveIdentity(
 			label: overrides.label ?? matchedRule.label ?? repo.repoName,
 			source: "rule",
 			status: matchedRule.status,
-			theme: overrides.theme ?? matchedRule.theme ?? config.fallbackTheme ?? pickAutoTheme(repo.repoName),
+			theme: resolveTheme(repo, config, overrides, matchedRule),
 			title: matchedRule.title,
 		};
 	}
 
 	// 2. Auto-assign or fallback
-	if (config.autoAssignTheme ?? DEFAULT_CONFIG.autoAssignTheme) {
+	if (isAutoAssignThemeEnabled(config, overrides)) {
 		return {
 			label: overrides.label ?? config.fallbackLabel ?? repo.repoName,
 			source: "auto",
-			theme: overrides.theme ?? pickAutoTheme(repo.repoName),
+			theme: resolveTheme(repo, config, overrides),
 		};
 	}
 
 	return {
 		label: overrides.label ?? config.fallbackLabel ?? repo.repoName,
 		source: "fallback",
-		theme: overrides.theme ?? config.fallbackTheme ?? "dark",
+		theme: resolveTheme(repo, config, overrides),
 	};
 }
 
@@ -426,6 +460,7 @@ async function ensureInitialEmoji(
 
 function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	const cleaned: RuntimeOverrides = {};
+	if (data.autoAssignTheme !== undefined) cleaned.autoAssignTheme = data.autoAssignTheme;
 	if (data.theme) cleaned.theme = data.theme;
 	if (data.label) cleaned.label = data.label;
 	if (data.emoji) cleaned.emoji = data.emoji;
@@ -444,6 +479,7 @@ function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 
 const SUBCOMMANDS = [
 	"theme",
+	"auto-theme",
 	"label",
 	"toggle",
 	"emoji",
@@ -615,17 +651,16 @@ async function showSettingsPanel(
 		let selectedThemeIdx = overrides.theme
 			? availableThemes.indexOf(overrides.theme as (typeof AUTO_THEMES)[number])
 			: -1;
-		if (selectedThemeIdx === -1)
-			selectedThemeIdx = availableThemes.indexOf(currentIdentity.theme as (typeof AUTO_THEMES)[number]);
-		if (selectedThemeIdx === -1) selectedThemeIdx = 0;
 
 		const flags = mergeFlags(currentConfig, overrides);
 		let labelText = overrides.label ?? currentIdentity.label;
 
-		// Settings focus: 0=theme, 1=label, 2=status, 3=branch, 4=title,
-		//   5=footerLine, 6=lineColor, 7=linePreset, 8=lineCustom, 9=emoji, 10=save, 11=cancel
-		const TOTAL_SETTINGS_OPTIONS = 12;
+		// Settings focus: 0=autoAssignTheme, 1=theme, 2=label, 3=status, 4=branch,
+		//   5=title, 6=footerLine, 7=lineColor, 8=linePreset, 9=lineCustom, 10=emoji, 11=save, 12=cancel
+		const TOTAL_SETTINGS_OPTIONS = 13;
 		let focusIndex = 0;
+		const autoAssignThemeOn = () => isAutoAssignThemeEnabled(currentConfig, overrides);
+		const themeRowEnabled = () => autoAssignThemeOn();
 		const footerLineOn = () => overrides.footerLine ?? false;
 		let lineWidthIdx = LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 1));
 		if (lineWidthIdx === -1) lineWidthIdx = 0;
@@ -634,13 +669,15 @@ async function showSettingsPanel(
 		const customLinePattern = () => sanitizeFooterLinePattern(overrides.footerLinePattern);
 
 		function isVisibleFocusIndex(index: number): boolean {
+			if (!themeRowEnabled() && index === 1) return false;
 			if (footerLineOn()) return true;
-			return index !== 6 && index !== 7 && index !== 8;
+			return index !== 7 && index !== 8 && index !== 9;
 		}
 
 		function clampFocus() {
+			if (!themeRowEnabled() && focusIndex === 1) focusIndex = 0;
 			if (!footerLineOn()) {
-				if (focusIndex === 6 || focusIndex === 7 || focusIndex === 8) focusIndex = 5;
+				if (focusIndex === 7 || focusIndex === 8 || focusIndex === 9) focusIndex = 6;
 			}
 		}
 
@@ -659,8 +696,14 @@ async function showSettingsPanel(
 
 		// ── Helpers ──────────────────────────────────────────────────────
 
+		function getLiveIdentity(): ResolvedIdentity {
+			return resolveIdentity(repo, currentConfig, overrides);
+		}
+
 		function getThemeName(): string {
-			return availableThemes[selectedThemeIdx] ?? currentIdentity.theme;
+			const liveIdentity = getLiveIdentity();
+			if (selectedThemeIdx === -1) return formatThemeValue(liveIdentity.theme);
+			return availableThemes[selectedThemeIdx] ?? formatThemeValue(liveIdentity.theme);
 		}
 
 		function currentEmojiList(): string[] {
@@ -700,51 +743,77 @@ async function showSettingsPanel(
 			add(theme.fg("accent", theme.bold(" ── pi-peacock settings ──")));
 			lines.push("");
 
+			const liveIdentity = getLiveIdentity();
+			const liveThemeIdx = liveIdentity.theme
+				? availableThemes.indexOf(liveIdentity.theme as (typeof AUTO_THEMES)[number])
+				: -1;
+
 			add(theme.fg("dim", `   Repo: ${repo.repoName}  Branch: ${repo.branch}`));
-			add(theme.fg("dim", `   Active rule: ${currentIdentity.source}`));
+			add(theme.fg("dim", `   Active rule: ${liveIdentity.source}`));
 			lines.push("");
 
-			// 1. Theme
+			// 1. Auto theme toggle
+			const autoThemeCh = autoAssignThemeOn() ? theme.fg("success", "☑") : theme.fg("dim", "☐");
+			add(`${focusIndex === 0 ? theme.fg("accent", "▸") : " "} ${autoThemeCh} ${theme.fg("dim", "Auto-assign theme:")}${focusIndex === 0 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
+			lines.push("");
+
+			// 2. Theme
 			const tn = getThemeName();
-			add(`${cur(0, "▸")}${focusIndex === 0 ? "" : " "} ${theme.fg("dim", "Theme:")}  ${theme.fg("accent", "■")} ${tn}${focusIndex === 0 ? theme.fg("dim", "  ← → browse") : ""}`);
-			add(`   ${theme.fg("dim", availableThemes.map((t) => t === tn ? theme.fg("accent", "●") : "○").join(" "))}`);
+			const themeHint = themeRowEnabled() && focusIndex === 1
+				? theme.fg("dim", "  ← → browse")
+				: "";
+			if (themeRowEnabled()) {
+				add(`${cur(1, "▸")}${focusIndex === 1 ? "" : " "} ${theme.fg("dim", "Theme:")}  ${theme.fg("accent", "■")} ${tn}${themeHint}`);
+			} else {
+				add(`  ${theme.fg("dim", "Theme:")}  ${theme.fg("dim", "■")} ${theme.fg("dim", tn)}`);
+			}
+			const themeDotIdx = selectedThemeIdx !== -1 ? selectedThemeIdx : liveThemeIdx;
+			if (themeDotIdx !== -1) {
+				add(`   ${theme.fg("dim", availableThemes.map((t, idx) => idx === themeDotIdx ? theme.fg("accent", "●") : "○").join(" "))}`);
+			} else if (liveIdentity.theme) {
+				add(`   ${theme.fg("dim", "Using a non-bundled theme.")}`);
+			} else {
+				add(`   ${theme.fg("dim", "Current pi theme is preserved.")}`);
+			}
+			if (!themeRowEnabled()) {
+				add(`   ${theme.fg("dim", "Enable Auto-assign theme to browse bundled themes.")}`);
+			}
 			lines.push("");
 
-			// 2. Label
-			// 2. Label
-			add(`${focusIndex === 1 ? theme.fg("accent", `▸ ${theme.fg("dim", "Label:")}  ${labelText}  ${theme.fg("dim", "Enter to edit")}`) : `  ${theme.fg("dim", "Label:")}  ${labelText}`}`);
+			// 3. Label
+			add(`${focusIndex === 2 ? theme.fg("accent", `▸ ${theme.fg("dim", "Label:")}  ${labelText}  ${theme.fg("dim", "Enter to edit")}`) : `  ${theme.fg("dim", "Label:")}  ${labelText}`}`);
 			lines.push("");
 
-			// 3-5. Toggles
+			// 4-6. Toggles
 			const tog = [["Status badge", flags.showStatus], ["Branch name", flags.showBranch], ["Terminal title", flags.showTitle]];
 			for (let i = 0; i < 3; i++) {
-				const idx = i + 2;
+				const idx = i + 3;
 				const ch = tog[i][1] ? theme.fg("success", "☑") : theme.fg("dim", "☐");
 				add(`${focusIndex === idx ? theme.fg("accent", "▸") : " "} ${ch} ${tog[i][0]}${focusIndex === idx ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
 			}
 			lines.push("");
 
-			// 6. Footer line toggle
+			// 7. Footer line toggle
 			const lineCh = footerLineOn() ? theme.fg("success", "☑") : theme.fg("dim", "☐");
-			add(`${focusIndex === 5 ? theme.fg("accent", "▸") : " "} ${lineCh} ${theme.fg("dim", "Footer line:")}${focusIndex === 5 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
+			add(`${focusIndex === 6 ? theme.fg("accent", "▸") : " "} ${lineCh} ${theme.fg("dim", "Footer line:")}${focusIndex === 6 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
 			if (footerLineOn()) {
-				// 7. Line color
+				// 8. Line color
 				const lc = LINE_COLORS[lineColorIdx] ?? "muted";
 				const lcSwatch = theme.fg(lc as any, "───");
-				add(`${focusIndex === 6 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${lcSwatch} ${lc}${focusIndex === 6 ? theme.fg("dim", "  ← →") : ""}`);
-				// 8. Line preset
+				add(`${focusIndex === 7 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${lcSwatch} ${lc}${focusIndex === 7 ? theme.fg("dim", "  ← →") : ""}`);
+				// 9. Line preset
 				const lw = LINE_WIDTHS[lineWidthIdx] ?? LINE_WIDTHS[0];
-				add(`${focusIndex === 7 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Preset:")}  ${lw.char.repeat(5)} ${lw.label}${focusIndex === 7 ? theme.fg("dim", "  ← →") : ""}`);
-				// 9. Custom line pattern
+				add(`${focusIndex === 8 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Preset:")}  ${lw.char.repeat(5)} ${lw.label}${focusIndex === 8 ? theme.fg("dim", "  ← →") : ""}`);
+				// 10. Custom line pattern
 				const customPattern = customLinePattern();
 				const customText = customPattern ?? theme.fg("muted", "(preset active)");
-				add(`${focusIndex === 8 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customText}${focusIndex === 8 ? theme.fg("dim", "  Enter to edit") : ""}`);
+				add(`${focusIndex === 9 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customText}${focusIndex === 9 ? theme.fg("dim", "  Enter to edit") : ""}`);
 			}
 			lines.push("");
 
-			// 10. Emoji badge
+			// 11. Emoji badge
 			const curEmoji = overrides.emoji ?? "🦚";
-			add(`${focusIndex === 9 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 9 ? theme.fg("dim", "  Enter to pick") : ""}`);
+			add(`${focusIndex === 10 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 10 ? theme.fg("dim", "  Enter to pick") : ""}`);
 			lines.push("");
 
 			// Preview
@@ -763,9 +832,9 @@ async function showSettingsPanel(
 			}
 			lines.push("");
 
-			// 11. Apply, 12. Cancel
-			add(sel(10, theme.fg("success", "✓ Apply & close")));
-			add(sel(11, theme.fg("muted", "✕ Cancel")));
+			// 12. Apply, 13. Cancel
+			add(sel(11, theme.fg("success", "✓ Apply & close")));
+			add(sel(12, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
@@ -949,18 +1018,20 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.left)) {
-				if (focusIndex === 0) {
-					selectedThemeIdx = (selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
+				if (focusIndex === 1 && themeRowEnabled()) {
+					selectedThemeIdx = selectedThemeIdx === -1
+						? availableThemes.length - 1
+						: (selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
 					overrides.theme = availableThemes[selectedThemeIdx];
-				} else if (focusIndex === 6 && footerLineOn()) {
+				} else if (focusIndex === 7 && footerLineOn()) {
 					lineColorIdx = (lineColorIdx - 1 + LINE_COLORS.length) % LINE_COLORS.length;
 					overrides.footerLineColor = LINE_COLORS[lineColorIdx];
-				} else if (focusIndex === 7 && footerLineOn()) {
+				} else if (focusIndex === 8 && footerLineOn()) {
 					lineWidthIdx = (lineWidthIdx - 1 + LINE_WIDTHS.length) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
 					overrides.footerLinePattern = undefined;
 				}
-				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -968,18 +1039,20 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.right)) {
-				if (focusIndex === 0) {
-					selectedThemeIdx = (selectedThemeIdx + 1) % availableThemes.length;
+				if (focusIndex === 1 && themeRowEnabled()) {
+					selectedThemeIdx = selectedThemeIdx === -1
+						? 0
+						: (selectedThemeIdx + 1) % availableThemes.length;
 					overrides.theme = availableThemes[selectedThemeIdx];
-				} else if (focusIndex === 6 && footerLineOn()) {
+				} else if (focusIndex === 7 && footerLineOn()) {
 					lineColorIdx = (lineColorIdx + 1) % LINE_COLORS.length;
 					overrides.footerLineColor = LINE_COLORS[lineColorIdx];
-				} else if (focusIndex === 7 && footerLineOn()) {
+				} else if (focusIndex === 8 && footerLineOn()) {
 					lineWidthIdx = (lineWidthIdx + 1) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
 					overrides.footerLinePattern = undefined;
 				}
-				if (focusIndex === 0 || focusIndex === 6 || focusIndex === 7) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -987,32 +1060,42 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
-				if (focusIndex === 1) {
+				if (focusIndex === 0) {
+					overrides.autoAssignTheme = !autoAssignThemeOn();
+					if (!overrides.autoAssignTheme) {
+						overrides.theme = undefined;
+						selectedThemeIdx = -1;
+					}
+					clampFocus();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					return;
+				}
+				if (focusIndex === 2) {
 					labelBuffer = overrides.label ?? labelText;
 					labelCursor = labelBuffer.length;
 					page = "labelEdit";
 					refresh();
 					return;
 				}
-				if (focusIndex === 2) {
+				if (focusIndex === 3) {
 					flags.showStatus = !flags.showStatus;
 					overrides.showStatus = flags.showStatus;
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
-				if (focusIndex === 3) {
+				if (focusIndex === 4) {
 					flags.showBranch = !flags.showBranch;
 					overrides.showBranch = flags.showBranch;
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
-				if (focusIndex === 4) {
+				if (focusIndex === 5) {
 					flags.showTitle = !flags.showTitle;
 					overrides.showTitle = flags.showTitle;
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
-				if (focusIndex === 5) {
+				if (focusIndex === 6) {
 					overrides.footerLine = !footerLineOn();
 					if (!overrides.footerLine) {
 						overrides.footerLineColor = undefined;
@@ -1020,25 +1103,25 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
 					return;
 				}
-				if (focusIndex === 8 && footerLineOn()) {
+				if (focusIndex === 9 && footerLineOn()) {
 					linePatternBuffer = customLinePattern() ?? "";
 					linePatternCursor = linePatternBuffer.length;
 					page = "linePatternEdit";
 					refresh();
 					return;
 				}
-				if (focusIndex === 9) {
+				if (focusIndex === 10) {
 					page = "emoji";
 					emojiCategoryIdx = 0;
 					emojiCursorIdx = 0;
 					refresh();
 					return;
 				}
-				if (focusIndex === 10) {
+				if (focusIndex === 11) {
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
-				if (focusIndex === 11) {
+				if (focusIndex === 12) {
 					done();
 					return;
 				}
@@ -1063,7 +1146,7 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
-					focusIndex = 9; // back to emoji badge item
+					focusIndex = 10; // back to emoji badge item
 					refresh();
 				}
 				return;
@@ -1121,11 +1204,13 @@ export default function (pi: ExtensionAPI) {
 			return { configPaths, identity, repo, signature };
 		}
 
-		// Apply theme
-		const themeResult = ctx.ui.setTheme(identity.theme);
-		if (!themeResult.success && !reportedThemeErrors.has(identity.theme)) {
-			reportedThemeErrors.add(identity.theme);
-			ctx.ui.notify(`pi-peacock: theme '${identity.theme}' not found`, "warning");
+		// Apply theme when one is assigned. Otherwise preserve the current pi theme.
+		if (identity.theme) {
+			const themeResult = ctx.ui.setTheme(identity.theme);
+			if (!themeResult.success && !reportedThemeErrors.has(identity.theme)) {
+				reportedThemeErrors.add(identity.theme);
+				ctx.ui.notify(`pi-peacock: theme '${identity.theme}' not found`, "warning");
+			}
 		}
 
 		// Footer: status badge + optional horizontal line ABOVE footer
@@ -1160,6 +1245,13 @@ export default function (pi: ExtensionAPI) {
 	// ── Sub-command handlers ──────────────────────────────────────────────
 
 	async function cmdTheme(args: string, ctx: ExtensionContext): Promise<void> {
+		const repo = await getRepoInfo(ctx.cwd);
+		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
+		if (!isAutoAssignThemeEnabled(config, runtimeOverrides)) {
+			ctx.ui.notify("pi-peacock: enable Auto-assign theme in /peacock before using /peacock theme", "warning");
+			return;
+		}
+
 		const name = args.trim();
 		if (!name) {
 			const choice = await ctx.ui.select(
@@ -1183,7 +1275,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
-		ctx.ui.notify(`pi-peacock: theme → ${applied.identity.theme}`, "info");
+		ctx.ui.notify(`pi-peacock: theme → ${formatThemeName(applied.identity.theme)}`, "info");
 	}
 
 	async function cmdLabel(args: string, ctx: ExtensionContext): Promise<void> {
@@ -1219,6 +1311,30 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(`pi-peacock: ${feature} → ${runtimeOverrides[validFeatures[feature]] ? "on" : "off"}`, "info");
 	}
 
+	async function cmdAutoTheme(args: string, ctx: ExtensionContext): Promise<void> {
+		const repo = await getRepoInfo(ctx.cwd);
+		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
+		const value = args.trim().toLowerCase();
+		const current = isAutoAssignThemeEnabled(config, runtimeOverrides);
+
+		let next: boolean;
+		if (!value || value === "toggle") next = !current;
+		else if (value === "on") next = true;
+		else if (value === "off") next = false;
+		else {
+			ctx.ui.notify(`pi-peacock: unknown auto-theme value '${value}'. Use: on or off`, "warning");
+			return;
+		}
+
+		runtimeOverrides.autoAssignTheme = next;
+		if (!next) {
+			runtimeOverrides.theme = undefined;
+		}
+		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		const applied = await applyIdentity(ctx, true);
+		ctx.ui.notify(`pi-peacock: auto-theme → ${next ? "on" : "off"} · ${formatThemeName(applied.identity.theme)}`, "info");
+	}
+
 	async function cmdReset(_args: string, ctx: ExtensionContext): Promise<void> {
 		const ok = await ctx.ui.confirm("Reset peacock overrides?", "This clears all runtime settings and reverts to file config.");
 		if (!ok) return;
@@ -1226,7 +1342,7 @@ export default function (pi: ExtensionAPI) {
 		lastSignature = "";
 		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
-		ctx.ui.notify(`pi-peacock: reset — using ${applied.identity.theme} (${applied.identity.source})`, "info");
+		ctx.ui.notify(`pi-peacock: reset — using ${formatThemeName(applied.identity.theme)} (${applied.identity.source})`, "info");
 	}
 
 	async function cmdStatus(_args: string, ctx: ExtensionContext): Promise<void> {
@@ -1235,7 +1351,7 @@ export default function (pi: ExtensionAPI) {
 		const configText = applied.configPaths.length > 0 ? `configs: ${applied.configPaths.join(", ")}` : "configs: none";
 		const overrideKeys = Object.keys(runtimeOverrides);
 		const overridesText = overrideKeys.length > 0 ? `overrides: ${overrideKeys.join(", ")}` : "overrides: none";
-		ctx.ui.notify(`pi-peacock: ${applied.identity.label} → ${applied.identity.theme} (${applied.identity.source})${branch} · ${configText} · ${overridesText}`, "info");
+		ctx.ui.notify(`pi-peacock: ${applied.identity.label} → ${formatThemeName(applied.identity.theme)} (${applied.identity.source})${branch} · ${configText} · ${overridesText}`, "info");
 	}
 
 	async function cmdEmoji(_args: string, ctx: ExtensionContext): Promise<void> {
@@ -1261,7 +1377,7 @@ export default function (pi: ExtensionAPI) {
 	// ── Register /peacock command ────────────────────────────────────────
 
 	pi.registerCommand("peacock", {
-		description: "Manage pi-peacock repo identity. Usage: /peacock [theme|label|toggle|emoji|reset|status]",
+		description: "Manage pi-peacock repo identity. Usage: /peacock [theme|auto-theme|label|toggle|emoji|reset|status]",
 		getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
 			const parts = prefix.trim().split(/\s+/);
 			const word = parts[parts.length - 1] ?? "";
@@ -1284,6 +1400,14 @@ export default function (pi: ExtensionAPI) {
 				const f = opts.filter((o) => o.value.startsWith(word));
 				return f.length > 0 ? f : null;
 			}
+			if (cmd === "auto-theme") {
+				const opts = [
+					{ value: "on", label: "on", description: "Enable auto theme assignment" },
+					{ value: "off", label: "off", description: "Disable auto theme assignment" },
+				];
+				const f = opts.filter((o) => o.value.startsWith(word));
+				return f.length > 0 ? f : null;
+			}
 			return null;
 		},
 		handler: async (args, ctx) => {
@@ -1293,6 +1417,7 @@ export default function (pi: ExtensionAPI) {
 			const rest = parts.slice(1).join(" ");
 			switch (sub) {
 				case "theme": await cmdTheme(rest, ctx); break;
+				case "auto-theme": await cmdAutoTheme(rest, ctx); break;
 				case "label": await cmdLabel(rest, ctx); break;
 				case "toggle": await cmdToggle(rest, ctx); break;
 				case "emoji": await cmdEmoji(rest, ctx); break;
@@ -1305,6 +1430,7 @@ export default function (pi: ExtensionAPI) {
 
 	const SUBCOMMAND_DESCS: Record<string, string> = {
 		theme: "Switch theme (e.g. /peacock theme peacock-amber)",
+		"auto-theme": "Enable or disable auto theme assignment (e.g. /peacock auto-theme on)",
 		label: "Set a custom label (e.g. /peacock label backend)",
 		emoji: "Pick an emoji for the footer badge",
 		toggle: "Toggle a feature: status, branch, or title",
