@@ -4,6 +4,8 @@ Peacock-style workspace coloring for [pi coding agent](https://pi.dev).
 
 `pi-peacock` is for people who work in **multiple repos or multiple pi sessions** and want each workspace to be instantly recognizable, similar to the VS Code Peacock extension.
 
+This repository started as a fork of the original [`metmirr/pi-peacock`](https://github.com/metmirr/pi-peacock) extension and has since grown into a more full-featured workspace identity tool with interactive controls, persistent runtime overrides, emoji support, and footer customization.
+
 It gives pi a repo identity by:
 
 - switching to a repo-specific theme
@@ -50,6 +52,12 @@ It does **not** try to recolor your terminal application's native window chrome,
 - **bundled themes** ready to use out of the box
 - **per-repo overrides** via `peacock.json`
 - **project + global config** support
+- **interactive settings panel** via `/peacock`
+- **runtime overrides that persist per repo** across sessions
+- **first-run random emoji badge** for repos without saved settings
+- **emoji picker** for the footer badge
+- **footer line customization** with color and pattern controls
+- **status, branch, and title toggles** from commands or TUI
 - **publishable pi package** for npm/git installs
 
 ## Included themes
@@ -104,9 +112,22 @@ Once installed, it will:
 1. detect the current git repo
 2. pick one of the bundled themes
 3. apply that theme consistently for that repo
-4. show repo + branch information in pi's UI
+4. assign a random emoji badge the first time a repo is seen
+5. show repo + branch information in pi's UI
 
 If you want fixed mappings, add a config file.
+
+## Fork notes
+
+Compared to the original [`metmirr/pi-peacock`](https://github.com/metmirr/pi-peacock) extension, this fork adds a broader runtime control layer on top of the core peacock idea.
+
+It includes:
+
+- a full-screen TUI settings panel
+- direct subcommands for theme, label, toggles, emoji, reset, and status
+- persistent per-repo runtime settings stored outside config files
+- configurable footer separator lines
+- richer badge customization for multi-repo workflows
 
 ## Configuration
 
@@ -181,13 +202,23 @@ Available placeholders in `title` and `status`:
 
 ### `/peacock`
 
-Re-applies the current repo identity and shows which theme/config source is active.
+Opens the interactive settings panel by default and can also be used with subcommands.
+
+Available subcommands:
+
+- `/peacock theme <name>`
+- `/peacock label <text>`
+- `/peacock toggle <status|branch|title>`
+- `/peacock emoji`
+- `/peacock reset`
+- `/peacock status`
 
 Useful when:
 
 - you changed config and want to refresh
 - you manually switched themes and want pi-peacock to take over again
 - you want to verify which rule matched
+- you want to adjust repo identity without editing config files
 
 ## NearbyGPT example
 
@@ -224,5 +255,6 @@ The package already includes the `pi-package` keyword so it is ready to be distr
 ## Notes
 
 - If no rule matches, `pi-peacock` auto-picks one of the bundled themes.
+- If a repo has no persisted settings yet, `pi-peacock` assigns a random emoji once and then keeps it for that repo.
 - If you switch git branches during a session, the footer/title updates after the current turn.
 - If you manually change theme in pi, `pi-peacock` will re-apply when identity changes or when you run `/peacock`.

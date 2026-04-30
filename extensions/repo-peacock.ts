@@ -395,6 +395,35 @@ async function restoreOverrides(
 	return {};
 }
 
+function hasPersistedOverrides(ctx: ExtensionContext): boolean {
+	const stateEntry = [...ctx.sessionManager.getBranch()]
+		.reverse()
+		.find((e) => e.type === "custom" && e.customType === STATE_KEY);
+	if (stateEntry?.data) return true;
+	return false;
+}
+
+function pickRandomEmoji(): string {
+	const emoji = EMOJI_PAGE_GRIDS[0] ?? [];
+	if (emoji.length === 0) return "🦚";
+	return emoji[Math.floor(Math.random() * emoji.length)] ?? "🦚";
+}
+
+async function ensureInitialEmoji(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	overrides: RuntimeOverrides,
+	repoName: string,
+): Promise<RuntimeOverrides> {
+	if (overrides.emoji) return overrides;
+	if (hasPersistedOverrides(ctx)) return overrides;
+	if (await exists(getOverridesFile(repoName))) return overrides;
+
+	const nextOverrides = { ...overrides, emoji: pickRandomEmoji() };
+	saveOverrides(pi, nextOverrides, repoName);
+	return nextOverrides;
+}
+
 function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	const cleaned: RuntimeOverrides = {};
 	if (data.theme) cleaned.theme = data.theme;
@@ -1297,6 +1326,7 @@ export default function (pi: ExtensionAPI) {
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
 		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
+		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
@@ -1305,6 +1335,7 @@ export default function (pi: ExtensionAPI) {
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
 		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
+		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});
