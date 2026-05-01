@@ -14,11 +14,27 @@ It gives pi a repo identity by:
 
 So instead of every pi session looking the same, your backend repo can feel orange, your frontend blue, your extension purple, and so on.
 
-## Screenshot
+## Screenshots
 
-![pi-peacock screenshot](./docs/screenshot.png)
+_All screenshots below are sanitized `termtosvg` captures taken from temporary demo repos._
 
-_pi-peacock giving the current workspace its own color, footer badge, and title identity inside pi._
+### Auto-assigned workspace identity
+
+![pi-peacock screenshot](./docs/screenshot.svg)
+
+_A repo can get its own badge, title, and bundled theme automatically, without requiring a manual per-project mapping._
+
+### Rule-based identity from config
+
+![pi-peacock rule-based config](./docs/screenshot-rule-based.svg)
+
+_Project-local `.pi/peacock.json` can rename a repo and apply a stable identity based on matching rules._
+
+### Minimal badge with custom footer separator
+
+![pi-peacock footer line customization](./docs/screenshot-footer-line.svg)
+
+_Runtime overrides can create a more compact badge with a custom emoji, hidden branch name, and patterned footer separator._
 
 ## What this package is for
 

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="terminal" baseProfile="full" viewBox="0 0 847 557" width="847" version="1.1">
+    <defs>
+        <termtosvg:template_settings xmlns:termtosvg="https://github.com/nbedos/termtosvg">
+            <termtosvg:screen_geometry columns="100" rows="28"/>
+            <termtosvg:animation type="css"/>
+        </termtosvg:template_settings>
+        <style type="text/css" id="generated-style"><![CDATA[#screen {
+                font-family: 'DejaVu Sans Mono', monospace;
+                font-style: normal;
+                font-size: 14px;
+            }
+
+        text {
+            dominant-baseline: text-before-edge;
+            white-space: pre;
+        }
+    ]]></style>
+        <style type="text/css" id="user-style">
+            /* The colors defined below are the default 16 colors used for rendering text of the terminal. Adjust
+               them as needed.
+               gjm8 color theme (source: https://terminal.sexy/) */
+            .foreground {fill: #f8f8f2}
+            .background {fill: #272822}
+            .color0 {fill: #272822}
+            .color1 {fill: #f92672}
+            .color2 {fill: #a6e22e}
+            .color3 {fill: #f4bf75}
+            .color4 {fill: #66d9ef}
+            .color5 {fill: #ae81ff}
+            .color6 {fill: #a1efe4}
+            .color7 {fill: #f8f8f2}
+            .color8 {fill: #75715e}
+            .color9 {fill: #fd971f}
+            .color10 {fill: #383830}
+            .color11 {fill: #49483e}
+            .color12 {fill: #a59f85}
+            .color13 {fill: #f5f4f1}
+            .color14 {fill: #cc6633}
+            .color15 {fill: #f9f8f5}
+        </style>
+    </defs>
+    <rect id="terminalui" class="background" width="100%" height="100%" ry="4.5826941"/>
+    <circle cx="24" cy="23" r="7" class="color1"/>
+    <circle cx="44" cy="23" r="7" class="color3"/>
+    <circle cx="64" cy="23" r="7" class="color2"/>
+    <svg id="screen" width="800" height="476" x="23" y="50" viewBox="0 0 800 476" preserveAspectRatio="xMidYMin slice"><rect class="background" height="100%" width="100%" x="0" y="0"/><defs><g id="g1"><text x="0" textLength="96" fill="#f0c674">[Extensions]</text><text x="96" textLength="704" class="foreground">                                                                                        </text></g><g id="g2"><text x="0" textLength="16" class="foreground">  </text><text x="16" textLength="32" fill="#8abeb7">path</text><text x="48" textLength="752" class="foreground">                                                                                              </text></g><g id="g3"><text x="0" textLength="408" fill="#666666">    /tmp/pi-peacock-demo/extensions/repo-peacock.ts</text><text x="408" textLength="392" class="foreground">                                                 </text></g><g id="g4"><text x="0" textLength="800" class="foreground">                                                                                                    </text></g><g id="g5"><text x="0" textLength="64" fill="#f0c674">[Themes]</text><text x="64" textLength="736" class="foreground">                                                                                            </text></g><g id="g6"><text x="0" textLength="400" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-amber.json</text><text x="400" textLength="400" class="foreground">                                                  </text></g><g id="g7"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-blue.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g8"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-cyan.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g9"><text x="0" textLength="400" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-green.json</text><text x="400" textLength="400" class="foreground">                                                  </text></g><g id="g10"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-lime.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g11"><text x="0" textLength="408" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-orange.json</text><text x="408" textLength="392" class="foreground">                                                 </text></g><g id="g12"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-pink.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g13"><text x="0" textLength="408" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-purple.json</text><text x="408" textLength="392" class="foreground">                                                 </text></g><g id="g14"><text x="0" textLength="384" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-red.json</text><text x="384" textLength="416" class="foreground">                                                    </text></g><g id="g15"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-rose.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g16"><text x="0" textLength="384" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-sky.json</text><text x="384" textLength="416" class="foreground">                                                    </text></g><g id="g17"><text x="0" textLength="392" fill="#666666">    /tmp/pi-peacock-demo/themes/peacock-teal.json</text><text x="392" textLength="408" class="foreground">                                                   </text></g><g id="g18"><text x="0" textLength="8" text-decoration="underline" class="foreground"> </text><text x="8" textLength="328" text-decoration="underline" fill="#626975">pi-peacock: auto-theme &#8594; on &#183; peacock-red</text><text x="336" textLength="464" text-decoration="underline" class="foreground">                                                          </text></g><g id="g19"><text x="0" textLength="800" fill="#ff5d73">&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;</text></g><g id="g20"><text x="0" textLength="8" class="background"> </text><text x="8" textLength="792" class="foreground">                                                                                                   </text></g><g id="g21"><text x="0" textLength="216" fill="#626975">/tmp/pi-peacock-demo (main)</text><text x="216" textLength="584" class="foreground">                                                                         </text></g><g id="g22"><text x="0" textLength="800" fill="#626975">0.0%/272k (auto)                                                           (openai) gpt-5.4 &#8226; medium</text></g><g id="g23"><text x="0" textLength="104" fill="#ff5d73">&#129434; pi-peacock</text><text x="104" textLength="56" fill="#626975"> &#183; main</text><text x="160" textLength="640" class="foreground">                                                                                </text></g></defs><g><use xlink:href="#g1" y="0"/><use xlink:href="#g2" y="17"/><use xlink:href="#g3" y="34"/><use xlink:href="#g4" y="51"/><use xlink:href="#g5" y="68"/><use xlink:href="#g2" y="85"/><use xlink:href="#g6" y="102"/><use xlink:href="#g7" y="119"/><use xlink:href="#g8" y="136"/><use xlink:href="#g9" y="153"/><use xlink:href="#g10" y="170"/><use xlink:href="#g11" y="187"/><use xlink:href="#g12" y="204"/><use xlink:href="#g13" y="221"/><use xlink:href="#g14" y="238"/><use xlink:href="#g15" y="255"/><use xlink:href="#g16" y="272"/><use xlink:href="#g17" y="289"/><use xlink:href="#g4" y="306"/><use xlink:href="#g4" y="323"/><use xlink:href="#g18" y="340"/><use xlink:href="#g4" y="357"/><use xlink:href="#g19" y="374"/><rect x="0" y="391" width="8" height="17" class="foreground"/><use xlink:href="#g20" y="391"/><use xlink:href="#g19" y="408"/><use xlink:href="#g21" y="425"/><use xlink:href="#g22" y="442"/><use xlink:href="#g23" y="459"/></g></svg>
+</svg>
