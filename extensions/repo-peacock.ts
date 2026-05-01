@@ -1294,7 +1294,11 @@ export default function (pi: ExtensionAPI) {
 		}
 		footerAnimationPhase = 0;
 		if (redrawStaticLine && footerAnimationCtx && footerAnimationEnabled) {
-			renderFooterLineWidget(footerAnimationCtx);
+			try {
+				renderFooterLineWidget(footerAnimationCtx);
+			} catch {
+				// ctx is stale after session replacement/reload; skip redraw
+			}
 		}
 	}
 
@@ -1314,7 +1318,11 @@ export default function (pi: ExtensionAPI) {
 		footerAnimationTimer = setInterval(() => {
 			if (!footerAnimationCtx || !footerAnimationEnabled || !footerAnimationAllowed) return;
 			footerAnimationPhase = (footerAnimationPhase + 1) % frameCount;
-			renderFooterLineWidget(footerAnimationCtx);
+			try {
+				renderFooterLineWidget(footerAnimationCtx);
+			} catch {
+				stopFooterLineAnimation(false);
+			}
 		}, footerAnimationIntervalMs);
 	}
 

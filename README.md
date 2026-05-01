@@ -96,28 +96,41 @@ These themes are tuned for dark terminals and make border/accent differences obv
 
 ## Install
 
-### From npm
+### From git (recommended)
 
 ```bash
-pi install npm:pi-peacock
+pi install git:github.com/UtImpetus/pi-peacock
 ```
 
-### From git
+Or via HTTPS shorthand:
 
 ```bash
-pi install git:github.com/metmirr/pi-peacock
+pi install https://github.com/UtImpetus/pi-peacock
 ```
 
 ### From a local checkout
 
 ```bash
+git clone https://github.com/UtImpetus/pi-peacock
 pi install ./pi-peacock
 ```
 
 ### Try without installing
 
 ```bash
+pi -e git:github.com/UtImpetus/pi-peacock
+```
+
+Or from a local checkout:
+
+```bash
 pi -e ./pi-peacock
+```
+
+### From npm (original version)
+
+```bash
+pi install npm:pi-peacock
 ```
 
 ## Quick start
@@ -276,7 +289,7 @@ npm publish
 After pushing the repo to GitHub, users can install it directly with:
 
 ```bash
-pi install git:github.com/metmirr/pi-peacock
+pi install git:github.com/UtImpetus/pi-peacock
 ```
 
 The package already includes the `pi-package` keyword so it is ready to be distributed as a pi package.
