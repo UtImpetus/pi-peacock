@@ -73,6 +73,7 @@ It does **not** try to recolor your terminal application's native window chrome,
 - **first-run random emoji badge** for repos without saved settings
 - **emoji picker** for the footer badge
 - **footer line customization** with color and pattern controls
+- **active-only footer line animation** while the agent is working
 - **status, branch, and title toggles** from commands or TUI
 - **publishable pi package** for npm/git installs
 
@@ -180,6 +181,8 @@ By default, `pi-peacock` preserves your current pi theme. If you want repo-speci
   "showStatus": true,
   "showTitle": true,
   "titlePrefix": "π",
+  "footerLineAnimate": true,
+  "footerLineAnimationMs": 320,
   "rules": [
     {
       "repo": "nearbygpt-backend",
@@ -207,6 +210,11 @@ Each rule can contain:
 - `label`: short name used for footer/title
 - `title`: custom title template
 - `status`: custom footer label/template
+
+Animation-related config:
+
+- `footerLineAnimate`: enable or disable footer-line animation while the agent is active
+- `footerLineAnimationMs`: animation step interval in milliseconds
 
 Available placeholders in `title` and `status`:
 

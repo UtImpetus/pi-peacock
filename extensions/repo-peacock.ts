@@ -59,6 +59,8 @@ const AUTO_THEMES = [
 	"peacock-teal",
 ] as const;
 
+const FOOTER_LINE_ANIMATION_INTERVAL_MS = 320;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type PeacockRule = {
@@ -79,6 +81,8 @@ type PeacockConfig = {
 	showStatus?: boolean;
 	showTitle?: boolean;
 	titlePrefix?: string;
+	footerLineAnimate?: boolean;
+	footerLineAnimationMs?: number;
 };
 
 /** Settings the user can override at runtime via commands/UI */
@@ -94,6 +98,8 @@ type RuntimeOverrides = {
 	footerLineColor?: string;
 	footerLinePattern?: string;
 	footerLineWidth?: number;
+	footerLineAnimate?: boolean;
+	footerLineAnimationMs?: number;
 };
 
 /** Subset of RuntimeOverrides that are boolean toggles */
@@ -121,6 +127,11 @@ type AppliedIdentity = {
 	identity: ResolvedIdentity;
 	repo: RepoInfo;
 	signature: string;
+};
+
+type FooterLineAnimationOptions = {
+	enabled: boolean;
+	intervalMs: number;
 };
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -372,11 +383,30 @@ function getTitle(
 	return `${prefix} ${identity.label}${branch}`.trim();
 }
 
+function sanitizeFooterLineAnimationIntervalMs(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	return Math.max(80, Math.min(5000, Math.round(value)));
+}
+
+function resolveFooterLineAnimation(
+	config: PeacockConfig,
+	overrides: RuntimeOverrides,
+): FooterLineAnimationOptions {
+	return {
+		enabled: overrides.footerLineAnimate ?? config.footerLineAnimate ?? true,
+		intervalMs:
+			sanitizeFooterLineAnimationIntervalMs(overrides.footerLineAnimationMs) ??
+			sanitizeFooterLineAnimationIntervalMs(config.footerLineAnimationMs) ??
+			FOOTER_LINE_ANIMATION_INTERVAL_MS,
+	};
+}
+
 function getSignature(
 	repo: RepoInfo,
 	identity: ResolvedIdentity,
 	flags: { showStatus: boolean; showBranch: boolean; showTitle: boolean },
 	overrides: RuntimeOverrides,
+	footerLineAnimation: FooterLineAnimationOptions,
 ): string {
 	return JSON.stringify({
 		branch: repo.branch,
@@ -384,6 +414,8 @@ function getSignature(
 		footerLineColor: overrides.footerLineColor,
 		footerLinePattern: overrides.footerLinePattern,
 		footerLineWidth: overrides.footerLineWidth,
+		footerLineAnimate: footerLineAnimation.enabled,
+		footerLineAnimationMs: footerLineAnimation.intervalMs,
 		label: identity.label,
 		showBranch: flags.showBranch,
 		showStatus: flags.showStatus,
@@ -469,6 +501,9 @@ function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	const pattern = sanitizeFooterLinePattern(data.footerLinePattern);
 	if (pattern) cleaned.footerLinePattern = pattern;
 	if (data.footerLineWidth !== undefined) cleaned.footerLineWidth = data.footerLineWidth;
+	if (data.footerLineAnimate !== undefined) cleaned.footerLineAnimate = data.footerLineAnimate;
+	const animationMs = sanitizeFooterLineAnimationIntervalMs(data.footerLineAnimationMs);
+	if (animationMs !== undefined) cleaned.footerLineAnimationMs = animationMs;
 	if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
 	if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
 	if (data.showTitle !== undefined) cleaned.showTitle = data.showTitle;
@@ -614,11 +649,26 @@ function getFooterLinePattern(overrides: RuntimeOverrides): string {
 	return sanitizeFooterLinePattern(overrides.footerLinePattern) ?? getLegacyLineChar(overrides.footerLineWidth);
 }
 
-function buildFooterLine(pattern: string, width: number): string {
+function rotateFooterLinePattern(pattern: string, phase: number): string {
 	const safePattern = sanitizeFooterLinePattern(pattern) ?? LINE_WIDTHS[0].char;
+	const chars = Array.from(safePattern);
+	if (chars.length <= 1) return safePattern;
+
+	const offset = ((phase % chars.length) + chars.length) % chars.length;
+	if (offset === 0) return safePattern;
+	return chars.slice(offset).join("") + chars.slice(0, offset).join("");
+}
+
+function getFooterLineAnimationFrameCount(pattern: string): number {
+	const safePattern = sanitizeFooterLinePattern(pattern) ?? LINE_WIDTHS[0].char;
+	return Array.from(safePattern).length;
+}
+
+function buildFooterLine(pattern: string, width: number, phase: number = 0): string {
+	const rotatedPattern = rotateFooterLinePattern(pattern, phase);
 	let line = "";
 	while (visibleWidth(line) < width) {
-		line += safePattern;
+		line += rotatedPattern;
 	}
 	return truncateToWidth(line, width);
 }
@@ -656,12 +706,17 @@ async function showSettingsPanel(
 		let labelText = overrides.label ?? currentIdentity.label;
 
 		// Settings focus: 0=autoAssignTheme, 1=theme, 2=label, 3=status, 4=branch,
-		//   5=title, 6=footerLine, 7=lineColor, 8=linePreset, 9=lineCustom, 10=emoji, 11=save, 12=cancel
-		const TOTAL_SETTINGS_OPTIONS = 13;
+		//   5=title, 6=footerLine, 7=lineColor, 8=linePreset, 9=lineCustom,
+		//   10=lineAnimate, 11=lineAnimationMs, 12=emoji, 13=save, 14=cancel
+		const TOTAL_SETTINGS_OPTIONS = 15;
+		const FOOTER_LINE_ANIMATION_STEP_MS = 40;
 		let focusIndex = 0;
 		const autoAssignThemeOn = () => isAutoAssignThemeEnabled(currentConfig, overrides);
 		const themeRowEnabled = () => autoAssignThemeOn();
 		const footerLineOn = () => overrides.footerLine ?? false;
+		const footerLineAnimation = () => resolveFooterLineAnimation(currentConfig, overrides);
+		const footerLineAnimationOn = () => footerLineAnimation().enabled;
+		const footerLineAnimationMs = () => footerLineAnimation().intervalMs;
 		let lineWidthIdx = LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 1));
 		if (lineWidthIdx === -1) lineWidthIdx = 0;
 		let lineColorIdx = Math.max(0,
@@ -670,15 +725,17 @@ async function showSettingsPanel(
 
 		function isVisibleFocusIndex(index: number): boolean {
 			if (!themeRowEnabled() && index === 1) return false;
-			if (footerLineOn()) return true;
-			return index !== 7 && index !== 8 && index !== 9;
+			if (!footerLineOn()) return index !== 7 && index !== 8 && index !== 9 && index !== 10 && index !== 11;
+			if (!footerLineAnimationOn() && index === 11) return false;
+			return true;
 		}
 
 		function clampFocus() {
 			if (!themeRowEnabled() && focusIndex === 1) focusIndex = 0;
 			if (!footerLineOn()) {
-				if (focusIndex === 7 || focusIndex === 8 || focusIndex === 9) focusIndex = 6;
+				if (focusIndex === 7 || focusIndex === 8 || focusIndex === 9 || focusIndex === 10 || focusIndex === 11) focusIndex = 6;
 			}
+			if (!footerLineAnimationOn() && focusIndex === 11) focusIndex = 10;
 		}
 
 		function moveFocus(delta: -1 | 1) {
@@ -808,12 +865,19 @@ async function showSettingsPanel(
 				const customPattern = customLinePattern();
 				const customText = customPattern ?? theme.fg("muted", "(preset active)");
 				add(`${focusIndex === 9 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customText}${focusIndex === 9 ? theme.fg("dim", "  Enter to edit") : ""}`);
+				// 11. Animation toggle
+				const animationCh = footerLineAnimationOn() ? theme.fg("success", "☑") : theme.fg("dim", "☐");
+				add(`${focusIndex === 10 ? theme.fg("accent", "▸") : " "} ${animationCh} ${theme.fg("dim", "Footer line animation:")}${focusIndex === 10 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
+				// 12. Animation speed
+				if (footerLineAnimationOn()) {
+					add(`${focusIndex === 11 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Animation speed:")}  ${footerLineAnimationMs()}ms${focusIndex === 11 ? theme.fg("dim", "  ← →") : ""}`);
+				}
 			}
 			lines.push("");
 
-			// 11. Emoji badge
+			// 13. Emoji badge
 			const curEmoji = overrides.emoji ?? "🦚";
-			add(`${focusIndex === 10 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 10 ? theme.fg("dim", "  Enter to pick") : ""}`);
+			add(`${focusIndex === 12 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 12 ? theme.fg("dim", "  Enter to pick") : ""}`);
 			lines.push("");
 
 			// Preview
@@ -825,6 +889,7 @@ async function showSettingsPanel(
 			if (footerLineOn()) {
 				const lineColor = overrides.footerLineColor ?? "muted";
 				add(`   ${theme.fg(lineColor as any, buildFooterLine(getFooterLinePattern(overrides), Math.max(8, width - 3)))}`);
+				add(`   ${theme.fg("dim", `Animation: ${footerLineAnimationOn() ? `active-only · ${footerLineAnimationMs()}ms` : "off"}`)}`);
 			}
 			if (flags.showTitle) {
 				const pfx = currentConfig.titlePrefix ?? DEFAULT_CONFIG.titlePrefix;
@@ -832,9 +897,9 @@ async function showSettingsPanel(
 			}
 			lines.push("");
 
-			// 12. Apply, 13. Cancel
-			add(sel(11, theme.fg("success", "✓ Apply & close")));
-			add(sel(12, theme.fg("muted", "✕ Cancel")));
+			// 14. Apply, 15. Cancel
+			add(sel(13, theme.fg("success", "✓ Apply & close")));
+			add(sel(14, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
@@ -1030,8 +1095,10 @@ async function showSettingsPanel(
 					lineWidthIdx = (lineWidthIdx - 1 + LINE_WIDTHS.length) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
 					overrides.footerLinePattern = undefined;
+				} else if (focusIndex === 11 && footerLineOn() && footerLineAnimationOn()) {
+					overrides.footerLineAnimationMs = sanitizeFooterLineAnimationIntervalMs(footerLineAnimationMs() - FOOTER_LINE_ANIMATION_STEP_MS) ?? FOOTER_LINE_ANIMATION_INTERVAL_MS;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1051,8 +1118,10 @@ async function showSettingsPanel(
 					lineWidthIdx = (lineWidthIdx + 1) % LINE_WIDTHS.length;
 					overrides.footerLineWidth = LINE_WIDTHS[lineWidthIdx].width;
 					overrides.footerLinePattern = undefined;
+				} else if (focusIndex === 11 && footerLineOn() && footerLineAnimationOn()) {
+					overrides.footerLineAnimationMs = sanitizeFooterLineAnimationIntervalMs(footerLineAnimationMs() + FOOTER_LINE_ANIMATION_STEP_MS) ?? FOOTER_LINE_ANIMATION_INTERVAL_MS;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1110,18 +1179,23 @@ async function showSettingsPanel(
 					refresh();
 					return;
 				}
-				if (focusIndex === 10) {
+				if (focusIndex === 10 && footerLineOn()) {
+					overrides.footerLineAnimate = !footerLineAnimationOn();
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); clampFocus(); refresh();
+					return;
+				}
+				if (focusIndex === 12) {
 					page = "emoji";
 					emojiCategoryIdx = 0;
 					emojiCursorIdx = 0;
 					refresh();
 					return;
 				}
-				if (focusIndex === 11) {
+				if (focusIndex === 13) {
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
-				if (focusIndex === 12) {
+				if (focusIndex === 14) {
 					done();
 					return;
 				}
@@ -1146,7 +1220,7 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
-					focusIndex = 10; // back to emoji badge item
+					focusIndex = 12; // back to emoji badge item
 					refresh();
 				}
 				return;
@@ -1185,6 +1259,64 @@ export default function (pi: ExtensionAPI) {
 	let currentRepoName = "";
 	const reportedConfigErrors = new Set<string>();
 	const reportedThemeErrors = new Set<string>();
+	let footerAnimationTimer: ReturnType<typeof setInterval> | null = null;
+	let footerAnimationPhase = 0;
+	let footerAnimationCtx: ExtensionContext | null = null;
+	let footerAnimationEnabled = false;
+	let footerAnimationAllowed = true;
+	let footerAnimationIntervalMs = FOOTER_LINE_ANIMATION_INTERVAL_MS;
+	let footerAnimationLineColor: string = "muted";
+	let footerAnimationLinePattern = LINE_WIDTHS[0].char;
+
+	function renderFooterLineWidget(ctx: ExtensionContext): void {
+		if (!footerAnimationEnabled) {
+			ctx.ui.setWidget("pi-peacock-line", undefined);
+			return;
+		}
+
+		const lineColor = footerAnimationLineColor;
+		const linePattern = footerAnimationLinePattern;
+		const phase = footerAnimationTimer ? footerAnimationPhase : 0;
+		ctx.ui.setWidget(
+			"pi-peacock-line",
+			(_tui, th) => ({
+				render: (w: number) => [th.fg(lineColor as any, buildFooterLine(linePattern, w, phase))],
+				invalidate() {},
+			}),
+			{ placement: "belowEditor" },
+		);
+	}
+
+	function stopFooterLineAnimation(redrawStaticLine: boolean = true): void {
+		if (footerAnimationTimer) {
+			clearInterval(footerAnimationTimer);
+			footerAnimationTimer = null;
+		}
+		footerAnimationPhase = 0;
+		if (redrawStaticLine && footerAnimationCtx && footerAnimationEnabled) {
+			renderFooterLineWidget(footerAnimationCtx);
+		}
+	}
+
+	function startFooterLineAnimation(ctx: ExtensionContext): void {
+		footerAnimationCtx = ctx;
+		if (!footerAnimationEnabled || !footerAnimationAllowed) return;
+
+		const frameCount = getFooterLineAnimationFrameCount(footerAnimationLinePattern);
+		if (frameCount <= 1) {
+			stopFooterLineAnimation(true);
+			return;
+		}
+		if (footerAnimationTimer) return;
+
+		footerAnimationPhase = 0;
+		renderFooterLineWidget(ctx);
+		footerAnimationTimer = setInterval(() => {
+			if (!footerAnimationCtx || !footerAnimationEnabled || !footerAnimationAllowed) return;
+			footerAnimationPhase = (footerAnimationPhase + 1) % frameCount;
+			renderFooterLineWidget(footerAnimationCtx);
+		}, footerAnimationIntervalMs);
+	}
 
 	async function applyIdentity(
 		ctx: ExtensionContext,
@@ -1198,7 +1330,8 @@ export default function (pi: ExtensionAPI) {
 		);
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		const flags = mergeFlags(config, runtimeOverrides);
-		const signature = getSignature(repo, identity, flags, runtimeOverrides);
+		const footerLineAnimation = resolveFooterLineAnimation(config, runtimeOverrides);
+		const signature = getSignature(repo, identity, flags, runtimeOverrides, footerLineAnimation);
 
 		if (!force && signature === lastSignature) {
 			return { configPaths, identity, repo, signature };
@@ -1223,14 +1356,26 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 		}
 
+		footerAnimationCtx = ctx;
+		footerAnimationEnabled = hasLine;
+		footerAnimationAllowed = footerLineAnimation.enabled;
+		const nextFooterAnimationIntervalMs = footerLineAnimation.intervalMs;
+		const footerAnimationNeedsRestart = footerAnimationTimer !== null && footerAnimationIntervalMs !== nextFooterAnimationIntervalMs;
+		footerAnimationIntervalMs = nextFooterAnimationIntervalMs;
+		footerAnimationLineColor = runtimeOverrides.footerLineColor ?? "muted";
+		footerAnimationLinePattern = getFooterLinePattern(runtimeOverrides);
 		if (hasLine) {
-			const lineColor = runtimeOverrides.footerLineColor ?? "muted";
-			const linePattern = getFooterLinePattern(runtimeOverrides);
-			ctx.ui.setWidget("pi-peacock-line",
-				(tui, th) => { return { render: (w: number) => [th.fg(lineColor as any, buildFooterLine(linePattern, w))], invalidate() {} }; },
-				{ placement: "belowEditor" },
-			);
+			if (footerAnimationNeedsRestart) {
+				stopFooterLineAnimation(false);
+			}
+			renderFooterLineWidget(ctx);
+			if (!ctx.isIdle() && footerAnimationAllowed) {
+				startFooterLineAnimation(ctx);
+			} else {
+				stopFooterLineAnimation(true);
+			}
 		} else {
+			stopFooterLineAnimation(false);
 			ctx.ui.setWidget("pi-peacock-line", undefined);
 		}
 
@@ -1466,11 +1611,21 @@ export default function (pi: ExtensionAPI) {
 		await applyIdentity(ctx);
 	});
 
+	pi.on("agent_start", async (_e, ctx) => {
+		startFooterLineAnimation(ctx);
+	});
+
+	pi.on("agent_end", async (_e, ctx) => {
+		stopFooterLineAnimation(true);
+		await applyIdentity(ctx, true);
+	});
+
 	pi.on("turn_end", async (_e, ctx) => {
 		await applyIdentity(ctx);
 	});
 
 	pi.on("session_shutdown", async (_e, ctx) => {
+		stopFooterLineAnimation(false);
 		ctx.ui.setStatus(STATUS_KEY, undefined);
 		ctx.ui.setWidget("pi-peacock-line", undefined);
 	});
