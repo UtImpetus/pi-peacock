@@ -23,12 +23,28 @@ import os from "node:os";
 import path, { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+	createBashTool,
+	createBashToolDefinition,
+	createEditTool,
+	createEditToolDefinition,
+	createFindTool,
+	createFindToolDefinition,
+	createGrepTool,
+	createGrepToolDefinition,
+	createLsTool,
+	createLsToolDefinition,
+	createReadTool,
+	createReadToolDefinition,
+	createWriteTool,
+	createWriteToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type {
 	AutocompleteItem,
 	ExtensionAPI,
 	ExtensionContext,
-} from "@mariozechner/pi-coding-agent";
-import { Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { type Component, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 const execFileAsync = promisify(execFile);
 
@@ -100,6 +116,11 @@ type RuntimeOverrides = {
 	footerLineWidth?: number;
 	footerLineAnimate?: boolean;
 	footerLineAnimationMs?: number;
+
+	// Tool stripe customization
+	toolStripe?: boolean;
+	toolStripeColor?: string;
+	toolStripeChar?: string;
 };
 
 /** Subset of RuntimeOverrides that are boolean toggles */
@@ -143,6 +164,152 @@ const DEFAULT_CONFIG: PeacockConfig = {
 	showTitle: true,
 	titlePrefix: "π",
 };
+
+type BuiltInToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
+
+type BuiltInToolBundle = {
+	definition: any;
+	tool: any;
+};
+
+const BUILT_IN_TOOL_NAMES: BuiltInToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+const builtInToolCache = new Map<string, Record<BuiltInToolName, BuiltInToolBundle>>();
+
+function createBuiltInTools(cwd: string): Record<BuiltInToolName, BuiltInToolBundle> {
+	return {
+		read: { definition: createReadToolDefinition(cwd), tool: createReadTool(cwd) },
+		bash: { definition: createBashToolDefinition(cwd), tool: createBashTool(cwd) },
+		edit: { definition: createEditToolDefinition(cwd), tool: createEditTool(cwd) },
+		write: { definition: createWriteToolDefinition(cwd), tool: createWriteTool(cwd) },
+		grep: { definition: createGrepToolDefinition(cwd), tool: createGrepTool(cwd) },
+		find: { definition: createFindToolDefinition(cwd), tool: createFindTool(cwd) },
+		ls: { definition: createLsToolDefinition(cwd), tool: createLsTool(cwd) },
+	};
+}
+
+function getBuiltInTools(cwd: string): Record<BuiltInToolName, BuiltInToolBundle> {
+	let tools = builtInToolCache.get(cwd);
+	if (!tools) {
+		tools = createBuiltInTools(cwd);
+		builtInToolCache.set(cwd, tools);
+	}
+	return tools;
+}
+
+class StripedComponent implements Component {
+	private child: Component | undefined;
+	private prefix = "";
+	wantsKeyRelease?: boolean;
+
+	getChild(): Component | undefined {
+		return this.child;
+	}
+
+	setChild(child: Component | undefined): void {
+		this.child = child;
+		this.wantsKeyRelease = child?.wantsKeyRelease;
+	}
+
+	setPrefix(prefix: string): void {
+		this.prefix = prefix;
+	}
+
+	invalidate(): void {
+		this.child?.invalidate?.();
+	}
+
+	handleInput(data: string): void {
+		this.child?.handleInput?.(data);
+	}
+
+	render(width: number): string[] {
+		if (!this.child) return [];
+		const prefixWidth = Math.max(0, Math.min(visibleWidth(this.prefix), Math.max(0, width - 1)));
+		const childWidth = Math.max(1, width - prefixWidth);
+		const childLines = this.child.render(childWidth);
+		if (childLines.length === 0) return [];
+		return childLines.map((line) => `${this.prefix}${line}`);
+	}
+}
+
+function sanitizeStripeChar(char: string | undefined): string {
+	if (!char) return DEFAULT_STRIPE_CHAR;
+	const cleaned = char.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 4);
+	if (!cleaned || visibleWidth(cleaned) === 0) return DEFAULT_STRIPE_CHAR;
+	return cleaned;
+}
+
+function getToolStripePrefix(
+	theme: { fg: (color: string, text: string) => string },
+	overrides: RuntimeOverrides,
+): string {
+	const color = overrides.toolStripeColor || DEFAULT_STRIPE_COLOR;
+	const char = sanitizeStripeChar(overrides.toolStripeChar);
+	return `${theme.fg(color as any, char)} `;
+}
+
+function registerStripedBuiltInTools(
+	pi: ExtensionAPI,
+	getOverrides: () => RuntimeOverrides,
+): void {
+	const baseTools = getBuiltInTools(process.cwd());
+	for (const toolName of BUILT_IN_TOOL_NAMES) {
+		const base = baseTools[toolName];
+		pi.registerTool({
+			name: toolName,
+			label: base.definition.label,
+			description: base.definition.description,
+			promptSnippet: base.definition.promptSnippet,
+			promptGuidelines: base.definition.promptGuidelines,
+			parameters: base.definition.parameters,
+			prepareArguments: base.definition.prepareArguments,
+
+			async execute(toolCallId, params, signal, onUpdate, ctx) {
+				return getBuiltInTools(ctx.cwd)[toolName].tool.execute(toolCallId, params, signal, onUpdate);
+			},
+
+			renderCall(args, theme, context) {
+				const overrides = getOverrides();
+				const definition = getBuiltInTools(context.cwd)[toolName].definition;
+				const innerResult = definition.renderCall?.(args, theme, {
+					...context,
+					lastComponent: context.lastComponent instanceof StripedComponent
+						? context.lastComponent.getChild()
+						: context.lastComponent,
+				});
+
+				if (!overrides.toolStripe) return innerResult ?? new StripedComponent();
+
+				const wrapper = context.lastComponent instanceof StripedComponent
+					? context.lastComponent
+					: new StripedComponent();
+				wrapper.setPrefix(getToolStripePrefix(theme, overrides));
+				wrapper.setChild(innerResult);
+				return wrapper;
+			},
+
+			renderResult(result, options, theme, context) {
+				const overrides = getOverrides();
+				const definition = getBuiltInTools(context.cwd)[toolName].definition;
+				const innerResult = definition.renderResult?.(result, options, theme, {
+					...context,
+					lastComponent: context.lastComponent instanceof StripedComponent
+						? context.lastComponent.getChild()
+						: context.lastComponent,
+				});
+
+				if (!overrides.toolStripe) return innerResult ?? new StripedComponent();
+
+				const wrapper = context.lastComponent instanceof StripedComponent
+					? context.lastComponent
+					: new StripedComponent();
+				wrapper.setPrefix(getToolStripePrefix(theme, overrides));
+				wrapper.setChild(innerResult);
+				return wrapper;
+			},
+		});
+	}
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -422,6 +589,9 @@ function getSignature(
 		showTitle: flags.showTitle,
 		source: identity.source,
 		theme: identity.theme,
+		toolStripe: overrides.toolStripe,
+		toolStripeChar: overrides.toolStripeChar,
+		toolStripeColor: overrides.toolStripeColor,
 	});
 }
 
@@ -507,6 +677,9 @@ function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	if (data.showStatus !== undefined) cleaned.showStatus = data.showStatus;
 	if (data.showBranch !== undefined) cleaned.showBranch = data.showBranch;
 	if (data.showTitle !== undefined) cleaned.showTitle = data.showTitle;
+	if (data.toolStripe !== undefined) cleaned.toolStripe = data.toolStripe;
+	if (data.toolStripeColor) cleaned.toolStripeColor = data.toolStripeColor;
+	if (data.toolStripeChar) cleaned.toolStripeChar = data.toolStripeChar;
 	return cleaned;
 }
 
@@ -614,6 +787,32 @@ async function copyEmoji(text: string): Promise<void> {
 
 const LINE_COLORS = ["accent", "border", "muted", "dim", "success", "warning", "error"] as const;
 
+// ─── Tool stripe constants ───────────────────────────────────────────────────
+
+const STRIPE_COLORS = ["accent", "border", "borderAccent", "muted", "dim", "success", "warning", "error"] as const;
+
+interface StripeCharOption {
+	label: string;
+	char: string;
+}
+
+const STRIPE_CHARS: StripeCharOption[] = [
+	{ label: "block", char: "▌" },
+	{ label: "solid", char: "█" },
+	{ label: "bar", char: "│" },
+	{ label: "thin", char: "╎" },
+	{ label: "dot", char: "┊" },
+	{ label: "dash", char: "╵" },
+	{ label: "double", char: "▎" },
+	{ label: "arrow", char: "▸" },
+	{ label: "diamond", char: "◆" },
+	{ label: "star", char: "★" },
+	{ label: "pound", char: "#" },
+];
+
+const DEFAULT_STRIPE_CHAR = STRIPE_CHARS[0].char;
+const DEFAULT_STRIPE_COLOR = STRIPE_COLORS[0];
+
 interface LineWidthOption {
 	label: string;
 	char: string;
@@ -688,7 +887,7 @@ async function showSettingsPanel(
 ): Promise<void> {
 	await ctx.ui.custom((tui, theme, _kb, done) => {
 		// ── Shared state ────────────────────────────────────────────────
-		let page: "settings" | "emoji" | "labelEdit" | "linePatternEdit" = "settings";
+		let page: "settings" | "emoji" | "labelEdit" | "linePatternEdit" | "stripeCharEdit" = "settings";
 		// Label edit state
 		let labelBuffer = "";
 		let labelCursor = 0;
@@ -707,8 +906,10 @@ async function showSettingsPanel(
 
 		// Settings focus: 0=autoAssignTheme, 1=theme, 2=label, 3=status, 4=branch,
 		//   5=title, 6=footerLine, 7=lineColor, 8=linePreset, 9=lineCustom,
-		//   10=lineAnimate, 11=lineAnimationMs, 12=emoji, 13=save, 14=cancel
-		const TOTAL_SETTINGS_OPTIONS = 15;
+		//   10=lineAnimate, 11=lineAnimationMs,
+		//   12=toolStripe, 13=stripeColor, 14=stripeChar, 15=stripeCustom,
+		//   16=emoji, 17=save, 18=cancel
+		const TOTAL_SETTINGS_OPTIONS = 19;
 		const FOOTER_LINE_ANIMATION_STEP_MS = 40;
 		let focusIndex = 0;
 		const autoAssignThemeOn = () => isAutoAssignThemeEnabled(currentConfig, overrides);
@@ -723,19 +924,36 @@ async function showSettingsPanel(
 			LINE_COLORS.indexOf((overrides.footerLineColor ?? "muted") as any));
 		const customLinePattern = () => sanitizeFooterLinePattern(overrides.footerLinePattern);
 
+		// Tool stripe state
+		const toolStripeOn = () => overrides.toolStripe ?? false;
+		let stripeColorIdx = Math.max(0,
+			STRIPE_COLORS.indexOf((overrides.toolStripeColor ?? DEFAULT_STRIPE_COLOR) as any));
+		let stripeCharIdx = STRIPE_CHARS.findIndex((s) => s.char === sanitizeStripeChar(overrides.toolStripeChar));
+		if (stripeCharIdx === -1) stripeCharIdx = 0;
+		let stripeCustomBuffer = overrides.toolStripeChar ?? "";
+		let stripeCustomCursor = 0;
+
 		function isVisibleFocusIndex(index: number): boolean {
 			if (!themeRowEnabled() && index === 1) return false;
-			if (!footerLineOn()) return index !== 7 && index !== 8 && index !== 9 && index !== 10 && index !== 11;
-			if (!footerLineAnimationOn() && index === 11) return false;
+			if (!footerLineOn()) {
+				if (index >= 7 && index <= 11) return false;
+			}
+			if (footerLineOn() && !footerLineAnimationOn() && index === 11) return false;
+			if (!toolStripeOn()) {
+				if (index >= 13 && index <= 15) return false;
+			}
 			return true;
 		}
 
 		function clampFocus() {
 			if (!themeRowEnabled() && focusIndex === 1) focusIndex = 0;
 			if (!footerLineOn()) {
-				if (focusIndex === 7 || focusIndex === 8 || focusIndex === 9 || focusIndex === 10 || focusIndex === 11) focusIndex = 6;
+				if (focusIndex >= 7 && focusIndex <= 11) focusIndex = 6;
 			}
-			if (!footerLineAnimationOn() && focusIndex === 11) focusIndex = 10;
+			if (footerLineOn() && !footerLineAnimationOn() && focusIndex === 11) focusIndex = 10;
+			if (!toolStripeOn()) {
+				if (focusIndex >= 13 && focusIndex <= 15) focusIndex = 12;
+			}
 		}
 
 		function moveFocus(delta: -1 | 1) {
@@ -788,6 +1006,7 @@ async function showSettingsPanel(
 			if (page === "emoji") return renderEmojiPage(lines, add, width);
 			if (page === "labelEdit") return renderLabelEditPage(lines, add, width);
 			if (page === "linePatternEdit") return renderLinePatternEditPage(lines, add, width);
+			if (page === "stripeCharEdit") return renderStripeCharEditPage(lines, add, width);
 			return renderSettingsPage(lines, add, width);
 		}
 
@@ -875,9 +1094,29 @@ async function showSettingsPanel(
 			}
 			lines.push("");
 
-			// 13. Emoji badge
+			// 12. Tool stripe toggle
+			const stripeCh = toolStripeOn() ? theme.fg("success", "☑") : theme.fg("dim", "☐");
+			add(`${focusIndex === 12 ? theme.fg("accent", "▸") : " "} ${stripeCh} ${theme.fg("dim", "Tool stripe:")}${focusIndex === 12 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
+			if (toolStripeOn()) {
+				// 13. Stripe color
+				const sc = STRIPE_COLORS[stripeColorIdx] ?? DEFAULT_STRIPE_COLOR;
+				const scSwatch = theme.fg(sc as any, sanitizeStripeChar(overrides.toolStripeChar).repeat(3));
+				add(`${focusIndex === 13 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${scSwatch} ${sc}${focusIndex === 13 ? theme.fg("dim", "  ← →") : ""}`);
+				// 14. Stripe char preset
+				const schar = STRIPE_CHARS[stripeCharIdx] ?? STRIPE_CHARS[0];
+				add(`${focusIndex === 14 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Char:")}  ${schar.char} ${schar.label}${focusIndex === 14 ? theme.fg("dim", "  ← →") : ""}`);
+				// 15. Custom stripe char
+				const customStripeChar = overrides.toolStripeChar && !STRIPE_CHARS.some(s => s.char === overrides.toolStripeChar)
+					? overrides.toolStripeChar
+					: undefined;
+				const customStripeText = customStripeChar ?? theme.fg("muted", "(preset active)");
+				add(`${focusIndex === 15 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customStripeText}${focusIndex === 15 ? theme.fg("dim", "  Enter to edit") : ""}`);
+			}
+			lines.push("");
+
+			// 16. Emoji badge
 			const curEmoji = overrides.emoji ?? "🦚";
-			add(`${focusIndex === 12 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 12 ? theme.fg("dim", "  Enter to pick") : ""}`);
+			add(`${focusIndex === 16 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 16 ? theme.fg("dim", "  Enter to pick") : ""}`);
 			lines.push("");
 
 			// Preview
@@ -891,15 +1130,21 @@ async function showSettingsPanel(
 				add(`   ${theme.fg(lineColor as any, buildFooterLine(getFooterLinePattern(overrides), Math.max(8, width - 3)))}`);
 				add(`   ${theme.fg("dim", `Animation: ${footerLineAnimationOn() ? `active-only · ${footerLineAnimationMs()}ms` : "off"}`)}`);
 			}
+			if (toolStripeOn()) {
+				const sColor = overrides.toolStripeColor || DEFAULT_STRIPE_COLOR;
+				const sChar = sanitizeStripeChar(overrides.toolStripeChar);
+				add(`   ${theme.fg(sColor as any, sChar)} ${theme.fg("dim", "read src/index.ts")}`);
+				add(`   ${theme.fg(sColor as any, sChar)} ${theme.fg("dim", "42 lines")}`);
+			}
 			if (flags.showTitle) {
 				const pfx = currentConfig.titlePrefix ?? DEFAULT_CONFIG.titlePrefix;
 				add(`   ${theme.fg("dim", `Title: ${pfx} ${pl}${flags.showBranch && repo.branch ? ` · ${repo.branch}` : ""}`)}`);
 			}
 			lines.push("");
 
-			// 14. Apply, 15. Cancel
-			add(sel(13, theme.fg("success", "✓ Apply & close")));
-			add(sel(14, theme.fg("muted", "✕ Cancel")));
+			// 17. Apply, 18. Cancel
+			add(sel(17, theme.fg("success", "✓ Apply & close")));
+			add(sel(18, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
@@ -973,6 +1218,20 @@ async function showSettingsPanel(
 			const after = linePatternBuffer.slice(linePatternCursor);
 			add("  " + theme.fg("accent", before) + theme.fg("success", "▁") + theme.fg("accent", after));
 			lines.push("");
+					add(theme.fg("dim", " Type text  ·  Enter confirm  ·  Esc cancel  ·  Backspace delete"));
+			return lines;
+		}
+
+		function renderStripeCharEditPage(lines: string[], add: (s: string) => void, _width: number): string[] {
+			add(theme.fg("accent", theme.bold(" ── Edit tool stripe char ──")));
+			lines.push("");
+			add(theme.fg("dim", "   Character(s) used as the left accent stripe on tool blocks."));
+			add(theme.fg("dim", "   Leave empty to fall back to the selected preset."));
+			lines.push("");
+			const before = stripeCustomBuffer.slice(0, stripeCustomCursor);
+			const after = stripeCustomBuffer.slice(stripeCustomCursor);
+			add("  " + theme.fg("accent", before) + theme.fg("success", "▁") + theme.fg("accent", after));
+			lines.push("");
 			add(theme.fg("dim", " Type text  ·  Enter confirm  ·  Esc cancel  ·  Backspace delete"));
 			return lines;
 		}
@@ -983,6 +1242,7 @@ async function showSettingsPanel(
 			if (page === "emoji") { handleEmojiInput(data); return; }
 			if (page === "labelEdit") { handleLabelEditInput(data); return; }
 			if (page === "linePatternEdit") { handleLinePatternEditInput(data); return; }
+			if (page === "stripeCharEdit") { handleStripeCharEditInput(data); return; }
 			handleSettingsInput(data);
 		}
 
@@ -1069,6 +1329,47 @@ async function showSettingsPanel(
 			}
 		}
 
+		function handleStripeCharEditInput(data: string) {
+			if (data === String.fromCharCode(0x7f) || data === String.fromCharCode(0x08)) {
+				if (stripeCustomCursor > 0) {
+					stripeCustomBuffer = stripeCustomBuffer.slice(0, stripeCustomCursor - 1) + stripeCustomBuffer.slice(stripeCustomCursor);
+					stripeCustomCursor--;
+					refresh();
+				}
+				return;
+			}
+			if (matchesKey(data, Key.enter)) {
+				const sanitized = sanitizeStripeChar(stripeCustomBuffer);
+				if (sanitized && sanitized !== DEFAULT_STRIPE_CHAR) {
+					overrides.toolStripeChar = sanitized;
+				} else {
+					overrides.toolStripeChar = undefined;
+				}
+				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+				page = "settings";
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.escape)) {
+				page = "settings";
+				refresh();
+				return;
+			}
+			if (matchesKey(data, Key.left)) {
+				stripeCustomCursor = Math.max(0, stripeCustomCursor - 1); refresh(); return;
+			}
+			if (matchesKey(data, Key.right)) {
+				stripeCustomCursor = Math.min(stripeCustomBuffer.length, stripeCustomCursor + 1); refresh(); return;
+			}
+			if (data.length === 1 && data.charCodeAt(0) < 0x20) return;
+			if (data.startsWith(String.fromCharCode(0x1b))) return;
+			if (data) {
+				stripeCustomBuffer = (stripeCustomBuffer.slice(0, stripeCustomCursor) + data + stripeCustomBuffer.slice(stripeCustomCursor)).slice(0, 4);
+				stripeCustomCursor = Math.min(stripeCustomBuffer.length, stripeCustomCursor + data.length);
+				refresh();
+			}
+		}
+
 		function handleSettingsInput(data: string) {
 			if (matchesKey(data, Key.up)) {
 				moveFocus(-1);
@@ -1097,8 +1398,14 @@ async function showSettingsPanel(
 					overrides.footerLinePattern = undefined;
 				} else if (focusIndex === 11 && footerLineOn() && footerLineAnimationOn()) {
 					overrides.footerLineAnimationMs = sanitizeFooterLineAnimationIntervalMs(footerLineAnimationMs() - FOOTER_LINE_ANIMATION_STEP_MS) ?? FOOTER_LINE_ANIMATION_INTERVAL_MS;
+				} else if (focusIndex === 13 && toolStripeOn()) {
+					stripeColorIdx = (stripeColorIdx - 1 + STRIPE_COLORS.length) % STRIPE_COLORS.length;
+					overrides.toolStripeColor = STRIPE_COLORS[stripeColorIdx];
+				} else if (focusIndex === 14 && toolStripeOn()) {
+					stripeCharIdx = (stripeCharIdx - 1 + STRIPE_CHARS.length) % STRIPE_CHARS.length;
+					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1120,8 +1427,14 @@ async function showSettingsPanel(
 					overrides.footerLinePattern = undefined;
 				} else if (focusIndex === 11 && footerLineOn() && footerLineAnimationOn()) {
 					overrides.footerLineAnimationMs = sanitizeFooterLineAnimationIntervalMs(footerLineAnimationMs() + FOOTER_LINE_ANIMATION_STEP_MS) ?? FOOTER_LINE_ANIMATION_INTERVAL_MS;
+				} else if (focusIndex === 13 && toolStripeOn()) {
+					stripeColorIdx = (stripeColorIdx + 1) % STRIPE_COLORS.length;
+					overrides.toolStripeColor = STRIPE_COLORS[stripeColorIdx];
+				} else if (focusIndex === 14 && toolStripeOn()) {
+					stripeCharIdx = (stripeCharIdx + 1) % STRIPE_CHARS.length;
+					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11) {
+				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1185,17 +1498,33 @@ async function showSettingsPanel(
 					return;
 				}
 				if (focusIndex === 12) {
+					overrides.toolStripe = !toolStripeOn();
+					if (!overrides.toolStripe) {
+						overrides.toolStripeColor = undefined;
+						overrides.toolStripeChar = undefined;
+					}
+					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); clampFocus(); refresh();
+					return;
+				}
+				if (focusIndex === 15 && toolStripeOn()) {
+					stripeCustomBuffer = overrides.toolStripeChar ?? "";
+					stripeCustomCursor = stripeCustomBuffer.length;
+					page = "stripeCharEdit";
+					refresh();
+					return;
+				}
+				if (focusIndex === 16) {
 					page = "emoji";
 					emojiCategoryIdx = 0;
 					emojiCursorIdx = 0;
 					refresh();
 					return;
 				}
-				if (focusIndex === 13) {
+				if (focusIndex === 17) {
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
-				if (focusIndex === 14) {
+				if (focusIndex === 18) {
 					done();
 					return;
 				}
@@ -1220,7 +1549,7 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
-					focusIndex = 12; // back to emoji badge item
+					focusIndex = 16; // back to emoji badge item
 					refresh();
 				}
 				return;
@@ -1254,6 +1583,8 @@ async function showSettingsPanel(
 // ─── Extension Factory ───────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	registerStripedBuiltInTools(pi, () => runtimeOverrides);
+
 	let lastSignature = "";
 	let runtimeOverrides: RuntimeOverrides = {};
 	let currentRepoName = "";
@@ -1329,6 +1660,7 @@ export default function (pi: ExtensionAPI) {
 	async function applyIdentity(
 		ctx: ExtensionContext,
 		force: boolean = false,
+		skipAnimationStart: boolean = false,
 	): Promise<AppliedIdentity> {
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
@@ -1377,7 +1709,7 @@ export default function (pi: ExtensionAPI) {
 				stopFooterLineAnimation(false);
 			}
 			renderFooterLineWidget(ctx);
-			if (!ctx.isIdle() && footerAnimationAllowed) {
+			if (!skipAnimationStart && !ctx.isIdle() && footerAnimationAllowed) {
 				startFooterLineAnimation(ctx);
 			} else {
 				stopFooterLineAnimation(true);
@@ -1625,7 +1957,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_e, ctx) => {
 		stopFooterLineAnimation(true);
-		await applyIdentity(ctx, true);
+		await applyIdentity(ctx, true, true);
 	});
 
 	pi.on("turn_end", async (_e, ctx) => {

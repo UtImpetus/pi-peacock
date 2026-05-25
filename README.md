@@ -65,6 +65,7 @@ It does **not** try to recolor your terminal application's native window chrome,
 
 - **optional automatic repo coloring** you can enable per repo from `/peacock`
 - **stable theme assignment** by hashing the git repo name when auto-assign is enabled
+- **accent-striped tool blocks** — every built-in tool (read, bash, edit, write, grep, find, ls) can show a colored left accent stripe, fully customizable: toggle on/off, choose color from theme palette, pick a preset character, or type a custom one. The stripe color matches the active peacock theme by default, giving each project a distinctive look at a glance
 - **bundled themes** ready to use out of the box
 - **per-repo overrides** via `peacock.json`
 - **project + global config** support
@@ -298,5 +299,6 @@ The package already includes the `pi-package` keyword so it is ready to be distr
 
 - If no rule matches, `pi-peacock` keeps your current pi theme unless auto-assign is enabled.
 - If a repo has no persisted settings yet, `pi-peacock` assigns a random emoji once and then keeps it for that repo.
+- Tool block accent stripes are off by default. Enable them from `/peacock` → **Tool stripe**. Once enabled, they use the theme's `accent` color by default. You can customize the color, pick from preset stripe characters (block, solid, bar, thin, dot, dash, double, arrow, diamond, star, pound), or type a custom character. Settings persist per repo.
 - If you switch git branches during a session, the footer/title updates after the current turn.
 - If auto-assign or a theme override is active and you manually change theme in pi, `pi-peacock` will re-apply when identity changes or when you run `/peacock`.
