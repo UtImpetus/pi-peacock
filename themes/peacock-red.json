@@ -8,17 +8,17 @@
     "success": "#7ddc84",
     "error": "#ff6b6b",
     "warning": "#ffd166",
-    "muted": "#8b929d",
-    "dim": "#626975",
-    "borderMuted": "#464b55",
-    "selectedBg": "#442128",
-    "userMsgBg": "#3d2025",
-    "pendingBg": "#2e1c1f",
+    "muted": "#c99da3",
+    "dim": "#93686e",
+    "borderMuted": "#6e3d45",
+    "selectedBg": "#482127",
+    "userMsgBg": "#3f1d22",
+    "pendingBg": "#2d1619",
     "successBg": "#1f2d22",
     "errorBg": "#341f24",
-    "customBg": "#352a1f",
-    "pageBg": "#15161a",
-    "cardBg": "#1b1d22"
+    "customBg": "#3f1e22",
+    "pageBg": "#170d0f",
+    "cardBg": "#241416"
   },
   "colors": {
     "accent": "accent",
@@ -56,7 +56,7 @@
     "toolDiffAdded": "success",
     "toolDiffRemoved": "error",
     "toolDiffContext": "muted",
-    "syntaxComment": "#6b7280",
+    "syntaxComment": "dim",
     "syntaxKeyword": "borderAccent",
     "syntaxFunction": "#f4d35e",
     "syntaxVariable": "#9ad1ff",
@@ -66,7 +66,7 @@
     "syntaxOperator": "",
     "syntaxPunctuation": "muted",
     "thinkingOff": "borderMuted",
-    "thinkingMinimal": "#6b7280",
+    "thinkingMinimal": "dim",
     "thinkingLow": "border",
     "thinkingMedium": "accent",
     "thinkingHigh": "borderAccent",
@@ -74,8 +74,8 @@
     "bashMode": "accent"
   },
   "export": {
-    "pageBg": "#15161a",
-    "cardBg": "#1b1d22",
-    "infoBg": "#442128"
+    "pageBg": "#170d0f",
+    "cardBg": "#241416",
+    "infoBg": "#482127"
   }
 }

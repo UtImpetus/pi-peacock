@@ -469,6 +469,29 @@ function formatThemeValue(theme: string | undefined): string {
 	return theme ?? "(unchanged)";
 }
 
+function isPeacockThemeName(name: string): boolean {
+	return (AUTO_THEMES as readonly string[]).includes(name);
+}
+
+function getAvailableThemeNames(ctx: ExtensionContext): string[] {
+	const uniqueNames = new Set<string>();
+	for (const { name } of ctx.ui.getAllThemes()) {
+		if (name) uniqueNames.add(name);
+	}
+	return Array.from(uniqueNames).sort((a, b) => {
+		const aIsPeacock = isPeacockThemeName(a);
+		const bIsPeacock = isPeacockThemeName(b);
+		if (aIsPeacock !== bIsPeacock) return aIsPeacock ? -1 : 1;
+		return a.localeCompare(b);
+	});
+}
+
+function formatThemeListPreview(themeNames: string[], maxItems: number = 12): string {
+	if (themeNames.length === 0) return "(none)";
+	if (themeNames.length <= maxItems) return themeNames.join(", ");
+	return `${themeNames.slice(0, maxItems).join(", ")}, … (+${themeNames.length - maxItems} more)`;
+}
+
 function resolveIdentity(
 	repo: RepoInfo,
 	config: PeacockConfig,
@@ -896,9 +919,9 @@ async function showSettingsPanel(
 
 		// Settings page state
 		let overrides = { ...currentOverrides };
-		const availableThemes = [...AUTO_THEMES];
+		const availableThemes = getAvailableThemeNames(ctx);
 		let selectedThemeIdx = overrides.theme
-			? availableThemes.indexOf(overrides.theme as (typeof AUTO_THEMES)[number])
+			? availableThemes.indexOf(overrides.theme)
 			: -1;
 
 		const flags = mergeFlags(currentConfig, overrides);
@@ -1021,7 +1044,7 @@ async function showSettingsPanel(
 
 			const liveIdentity = getLiveIdentity();
 			const liveThemeIdx = liveIdentity.theme
-				? availableThemes.indexOf(liveIdentity.theme as (typeof AUTO_THEMES)[number])
+				? availableThemes.indexOf(liveIdentity.theme)
 				: -1;
 
 			add(theme.fg("dim", `   Repo: ${repo.repoName}  Branch: ${repo.branch}`));
@@ -1043,16 +1066,22 @@ async function showSettingsPanel(
 			} else {
 				add(`  ${theme.fg("dim", "Theme:")}  ${theme.fg("dim", "■")} ${theme.fg("dim", tn)}`);
 			}
-			const themeDotIdx = selectedThemeIdx !== -1 ? selectedThemeIdx : liveThemeIdx;
-			if (themeDotIdx !== -1) {
-				add(`   ${theme.fg("dim", availableThemes.map((t, idx) => idx === themeDotIdx ? theme.fg("accent", "●") : "○").join(" "))}`);
+			const themeBrowseIdx = selectedThemeIdx !== -1 ? selectedThemeIdx : liveThemeIdx;
+			if (themeBrowseIdx !== -1) {
+				if (availableThemes.length === 1) {
+					add(`   ${theme.fg("dim", "1 installed theme available.")}`);
+				} else {
+					const prevTheme = availableThemes[(themeBrowseIdx - 1 + availableThemes.length) % availableThemes.length];
+					const nextTheme = availableThemes[(themeBrowseIdx + 1) % availableThemes.length];
+					add(`   ${theme.fg("dim", `${themeBrowseIdx + 1}/${availableThemes.length} installed · ← ${prevTheme} · → ${nextTheme}`)}`);
+				}
 			} else if (liveIdentity.theme) {
-				add(`   ${theme.fg("dim", "Using a non-bundled theme.")}`);
+				add(`   ${theme.fg("warning", `Theme '${liveIdentity.theme}' is not currently installed.`)}`);
 			} else {
 				add(`   ${theme.fg("dim", "Current pi theme is preserved.")}`);
 			}
 			if (!themeRowEnabled()) {
-				add(`   ${theme.fg("dim", "Enable Auto-assign theme to browse bundled themes.")}`);
+				add(`   ${theme.fg("dim", `Enable Auto-assign theme to browse ${availableThemes.length} installed themes.`)}`);
 			}
 			lines.push("");
 
@@ -1384,7 +1413,7 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.left)) {
-				if (focusIndex === 1 && themeRowEnabled()) {
+				if (focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) {
 					selectedThemeIdx = selectedThemeIdx === -1
 						? availableThemes.length - 1
 						: (selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
@@ -1405,7 +1434,7 @@ async function showSettingsPanel(
 					stripeCharIdx = (stripeCharIdx - 1 + STRIPE_CHARS.length) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
+				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1413,7 +1442,7 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.right)) {
-				if (focusIndex === 1 && themeRowEnabled()) {
+				if (focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) {
 					selectedThemeIdx = selectedThemeIdx === -1
 						? 0
 						: (selectedThemeIdx + 1) % availableThemes.length;
@@ -1434,7 +1463,7 @@ async function showSettingsPanel(
 					stripeCharIdx = (stripeCharIdx + 1) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled()) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
+				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1587,6 +1616,7 @@ export default function (pi: ExtensionAPI) {
 
 	let lastSignature = "";
 	let runtimeOverrides: RuntimeOverrides = {};
+	let availableThemeNames = [...AUTO_THEMES] as string[];
 	let currentRepoName = "";
 	const reportedConfigErrors = new Set<string>();
 	const reportedThemeErrors = new Set<string>();
@@ -1662,6 +1692,7 @@ export default function (pi: ExtensionAPI) {
 		force: boolean = false,
 		skipAnimationStart: boolean = false,
 	): Promise<AppliedIdentity> {
+		availableThemeNames = getAvailableThemeNames(ctx);
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
 		const { config, configPaths } = await loadConfig(
@@ -1737,26 +1768,23 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 
+		const availableThemes = getAvailableThemeNames(ctx);
+		availableThemeNames = availableThemes;
 		const name = args.trim();
 		if (!name) {
-			const choice = await ctx.ui.select(
-				"Select a peacock theme:",
-				[...AUTO_THEMES].map((t) => ({ label: t, value: t })),
-			);
+			const choice = await ctx.ui.select("Select a theme for this repo:", availableThemes);
 			if (!choice) return;
 			runtimeOverrides.theme = choice;
 		} else {
-			if ((AUTO_THEMES as readonly string[]).includes(name)) {
-				runtimeOverrides.theme = name;
-			} else {
-				const tr = ctx.ui.setTheme(name);
-				if (!tr.success) {
-					ctx.ui.notify(`pi-peacock: theme '${name}' not found. Available: ${AUTO_THEMES.join(", ")}`, "warning");
-					return;
-				}
-				await applyIdentity(ctx);
-				runtimeOverrides.theme = name;
+			const tr = ctx.ui.setTheme(name);
+			if (!tr.success) {
+				ctx.ui.notify(
+					`pi-peacock: theme '${name}' not found. Installed themes: ${formatThemeListPreview(availableThemes)}`,
+					"warning",
+				);
+				return;
 			}
+			runtimeOverrides.theme = name;
 		}
 		saveOverrides(pi, runtimeOverrides, currentRepoName);
 		const applied = await applyIdentity(ctx, true);
@@ -1873,7 +1901,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			const cmd = parts[0];
 			if (cmd === "theme") {
-				const f = AUTO_THEMES.filter((t) => t.startsWith(word)).map((t) => ({ value: t, label: t }));
+				const f = availableThemeNames.filter((t) => t.startsWith(word)).map((t) => ({ value: t, label: t }));
 				return f.length > 0 ? f : null;
 			}
 			if (cmd === "toggle") {

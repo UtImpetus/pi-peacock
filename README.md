@@ -66,7 +66,7 @@ It does **not** try to recolor your terminal application's native window chrome,
 - **optional automatic repo coloring** you can enable per repo from `/peacock`
 - **stable theme assignment** by hashing the git repo name when auto-assign is enabled
 - **accent-striped tool blocks** — every built-in tool (read, bash, edit, write, grep, find, ls) can show a colored left accent stripe, fully customizable: toggle on/off, choose color from theme palette, pick a preset character, or type a custom one. The stripe color matches the active peacock theme by default, giving each project a distinctive look at a glance
-- **bundled themes** ready to use out of the box
+- **bundled peacock themes** ready to use out of the box, plus repo-level switching to any theme installed in pi
 - **per-repo overrides** via `peacock.json`
 - **project + global config** support
 - **interactive settings panel** via `/peacock`
@@ -244,11 +244,11 @@ Available placeholders in `title` and `status`:
 
 Opens the interactive settings panel by default and can also be used with subcommands.
 
-Inside the settings panel, the bundled theme picker is disabled until you turn on **Auto-assign theme**.
+Inside the settings panel, the installed-theme picker is disabled until you turn on **Auto-assign theme**.
 
 Available subcommands:
 
-- `/peacock theme <name>` — requires **Auto-assign theme** to be enabled
+- `/peacock theme <name>` — requires **Auto-assign theme** to be enabled and accepts any installed pi theme name
 - `/peacock auto-theme <on|off>`
 - `/peacock label <text>`
 - `/peacock toggle <status|branch|title>`
