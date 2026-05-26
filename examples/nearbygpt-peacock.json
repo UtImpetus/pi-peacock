@@ -1,4 +1,9 @@
 {
+  "footerLine": true,
+  "footerLineColor": "accent",
+  "footerLinePattern": "┄",
+  "toolStripe": true,
+  "toolStripeSide": "both",
   "rules": [
     {
       "repo": "nearbygpt-backend",

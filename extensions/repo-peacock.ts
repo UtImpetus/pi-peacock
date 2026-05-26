@@ -79,6 +79,8 @@ const FOOTER_LINE_ANIMATION_INTERVAL_MS = 320;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+type ToolStripeSide = "left" | "right" | "both";
+
 type PeacockRule = {
 	repo?: string;
 	pathIncludes?: string | string[];
@@ -86,6 +88,16 @@ type PeacockRule = {
 	label?: string;
 	title?: string;
 	status?: string;
+	footerLine?: boolean;
+	footerLineColor?: string;
+	footerLinePattern?: string;
+	footerLineWidth?: number;
+	footerLineAnimate?: boolean;
+	footerLineAnimationMs?: number;
+	toolStripe?: boolean;
+	toolStripeColor?: string;
+	toolStripeChar?: string;
+	toolStripeSide?: ToolStripeSide;
 };
 
 type PeacockConfig = {
@@ -97,8 +109,16 @@ type PeacockConfig = {
 	showStatus?: boolean;
 	showTitle?: boolean;
 	titlePrefix?: string;
+	footerLine?: boolean;
+	footerLineColor?: string;
+	footerLinePattern?: string;
+	footerLineWidth?: number;
 	footerLineAnimate?: boolean;
 	footerLineAnimationMs?: number;
+	toolStripe?: boolean;
+	toolStripeColor?: string;
+	toolStripeChar?: string;
+	toolStripeSide?: ToolStripeSide;
 };
 
 /** Settings the user can override at runtime via commands/UI */
@@ -121,6 +141,7 @@ type RuntimeOverrides = {
 	toolStripe?: boolean;
 	toolStripeColor?: string;
 	toolStripeChar?: string;
+	toolStripeSide?: ToolStripeSide;
 };
 
 /** Subset of RuntimeOverrides that are boolean toggles */
@@ -150,9 +171,21 @@ type AppliedIdentity = {
 	signature: string;
 };
 
-type FooterLineAnimationOptions = {
+type ResolvedFooterLineSettings = {
 	enabled: boolean;
-	intervalMs: number;
+	color: string;
+	pattern: string;
+	width?: number;
+	customPattern?: string;
+	animationEnabled: boolean;
+	animationMs: number;
+};
+
+type ResolvedToolStripeSettings = {
+	enabled: boolean;
+	color: string;
+	char: string;
+	side: ToolStripeSide;
 };
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -199,6 +232,7 @@ function getBuiltInTools(cwd: string): Record<BuiltInToolName, BuiltInToolBundle
 class StripedComponent implements Component {
 	private child: Component | undefined;
 	private prefix = "";
+	private suffix = "";
 	wantsKeyRelease?: boolean;
 
 	getChild(): Component | undefined {
@@ -214,6 +248,10 @@ class StripedComponent implements Component {
 		this.prefix = prefix;
 	}
 
+	setSuffix(suffix: string): void {
+		this.suffix = suffix;
+	}
+
 	invalidate(): void {
 		this.child?.invalidate?.();
 	}
@@ -223,12 +261,29 @@ class StripedComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		if (!this.child) return [];
-		const prefixWidth = Math.max(0, Math.min(visibleWidth(this.prefix), Math.max(0, width - 1)));
-		const childWidth = Math.max(1, width - prefixWidth);
+		if (!this.child || width <= 0) return [];
+
+		let prefix = this.prefix;
+		let suffix = this.suffix;
+		let prefixWidth = visibleWidth(prefix);
+		let suffixWidth = visibleWidth(suffix);
+		const maxDecorationWidth = Math.max(0, width - 1);
+
+		if (prefixWidth + suffixWidth > maxDecorationWidth) {
+			const maxSuffixWidth = Math.max(0, maxDecorationWidth - prefixWidth);
+			suffix = truncateToWidth(suffix, maxSuffixWidth, "");
+			suffixWidth = visibleWidth(suffix);
+		}
+		if (prefixWidth + suffixWidth > maxDecorationWidth) {
+			const maxPrefixWidth = Math.max(0, maxDecorationWidth - suffixWidth);
+			prefix = truncateToWidth(prefix, maxPrefixWidth, "");
+			prefixWidth = visibleWidth(prefix);
+		}
+
+		const childWidth = Math.max(1, width - prefixWidth - suffixWidth);
 		const childLines = this.child.render(childWidth);
 		if (childLines.length === 0) return [];
-		return childLines.map((line) => `${this.prefix}${line}`);
+		return childLines.map((line) => `${prefix}${truncateToWidth(line, childWidth, "", true)}${suffix}`);
 	}
 }
 
@@ -239,18 +294,37 @@ function sanitizeStripeChar(char: string | undefined): string {
 	return cleaned;
 }
 
-function getToolStripePrefix(
+function sanitizeToolStripeSide(side: ToolStripeSide | undefined): ToolStripeSide | undefined {
+	if (!side) return undefined;
+	return STRIPE_SIDES.includes(side) ? side : undefined;
+}
+
+function getToolStripeSide(side: ToolStripeSide | undefined): ToolStripeSide {
+	return sanitizeToolStripeSide(side) ?? DEFAULT_STRIPE_SIDE;
+}
+
+function getMirroredToolStripeChar(char: string): string {
+	return STRIPE_CHAR_MIRRORS[char] ?? char;
+}
+
+function getToolStripeDecoration(
 	theme: { fg: (color: string, text: string) => string },
-	overrides: RuntimeOverrides,
-): string {
-	const color = overrides.toolStripeColor || DEFAULT_STRIPE_COLOR;
-	const char = sanitizeStripeChar(overrides.toolStripeChar);
-	return `${theme.fg(color as any, char)} `;
+	settings: Pick<ResolvedToolStripeSettings, "color" | "char" | "side">,
+): { prefix: string; suffix: string } {
+	const color = settings.color || DEFAULT_STRIPE_COLOR;
+	const char = sanitizeStripeChar(settings.char);
+	const side = getToolStripeSide(settings.side);
+	const leftStripe = `${theme.fg(color as any, char)} `;
+	const rightStripe = ` ${theme.fg(color as any, getMirroredToolStripeChar(char))}`;
+	return {
+		prefix: side === "left" || side === "both" ? leftStripe : "",
+		suffix: side === "right" || side === "both" ? rightStripe : "",
+	};
 }
 
 function registerStripedBuiltInTools(
 	pi: ExtensionAPI,
-	getOverrides: () => RuntimeOverrides,
+	getToolStripeSettings: () => ResolvedToolStripeSettings,
 ): void {
 	const baseTools = getBuiltInTools(process.cwd());
 	for (const toolName of BUILT_IN_TOOL_NAMES) {
@@ -269,7 +343,7 @@ function registerStripedBuiltInTools(
 			},
 
 			renderCall(args, theme, context) {
-				const overrides = getOverrides();
+				const toolStripeSettings = getToolStripeSettings();
 				const definition = getBuiltInTools(context.cwd)[toolName].definition;
 				const innerResult = definition.renderCall?.(args, theme, {
 					...context,
@@ -278,18 +352,20 @@ function registerStripedBuiltInTools(
 						: context.lastComponent,
 				});
 
-				if (!overrides.toolStripe) return innerResult ?? new StripedComponent();
+				if (!toolStripeSettings.enabled) return innerResult ?? new StripedComponent();
 
 				const wrapper = context.lastComponent instanceof StripedComponent
 					? context.lastComponent
 					: new StripedComponent();
-				wrapper.setPrefix(getToolStripePrefix(theme, overrides));
+				const decoration = getToolStripeDecoration(theme, toolStripeSettings);
+				wrapper.setPrefix(decoration.prefix);
+				wrapper.setSuffix(decoration.suffix);
 				wrapper.setChild(innerResult);
 				return wrapper;
 			},
 
 			renderResult(result, options, theme, context) {
-				const overrides = getOverrides();
+				const toolStripeSettings = getToolStripeSettings();
 				const definition = getBuiltInTools(context.cwd)[toolName].definition;
 				const innerResult = definition.renderResult?.(result, options, theme, {
 					...context,
@@ -298,12 +374,14 @@ function registerStripedBuiltInTools(
 						: context.lastComponent,
 				});
 
-				if (!overrides.toolStripe) return innerResult ?? new StripedComponent();
+				if (!toolStripeSettings.enabled) return innerResult ?? new StripedComponent();
 
 				const wrapper = context.lastComponent instanceof StripedComponent
 					? context.lastComponent
 					: new StripedComponent();
-				wrapper.setPrefix(getToolStripePrefix(theme, overrides));
+				const decoration = getToolStripeDecoration(theme, toolStripeSettings);
+				wrapper.setPrefix(decoration.prefix);
+				wrapper.setSuffix(decoration.suffix);
 				wrapper.setChild(innerResult);
 				return wrapper;
 			},
@@ -376,6 +454,10 @@ function ruleMatches(rule: PeacockRule, repo: RepoInfo): boolean {
 	}
 
 	return hasSelector;
+}
+
+function findMatchingRule(config: PeacockConfig, repo: RepoInfo): PeacockRule | undefined {
+	return (config.rules ?? []).find((rule) => ruleMatches(rule, repo));
 }
 
 // ─── Config Loading ──────────────────────────────────────────────────────────
@@ -498,7 +580,7 @@ function resolveIdentity(
 	overrides: RuntimeOverrides,
 ): ResolvedIdentity {
 	// 1. Try a config file rule
-	const matchedRule = (config.rules ?? []).find((rule) => ruleMatches(rule, repo));
+	const matchedRule = findMatchingRule(config, repo);
 	if (matchedRule) {
 		return {
 			label: overrides.label ?? matchedRule.label ?? repo.repoName,
@@ -522,6 +604,45 @@ function resolveIdentity(
 		label: overrides.label ?? config.fallbackLabel ?? repo.repoName,
 		source: "fallback",
 		theme: resolveTheme(repo, config, overrides),
+	};
+}
+
+function resolveToolStripeSettings(
+	repo: RepoInfo,
+	config: PeacockConfig,
+	overrides: RuntimeOverrides,
+): ResolvedToolStripeSettings {
+	const matchedRule = findMatchingRule(config, repo);
+	return {
+		enabled: overrides.toolStripe ?? matchedRule?.toolStripe ?? config.toolStripe ?? false,
+		color: overrides.toolStripeColor ?? matchedRule?.toolStripeColor ?? config.toolStripeColor ?? DEFAULT_STRIPE_COLOR,
+		char: sanitizeStripeChar(overrides.toolStripeChar ?? matchedRule?.toolStripeChar ?? config.toolStripeChar),
+		side: getToolStripeSide(overrides.toolStripeSide ?? matchedRule?.toolStripeSide ?? config.toolStripeSide),
+	};
+}
+
+function resolveFooterLineSettings(
+	repo: RepoInfo,
+	config: PeacockConfig,
+	overrides: RuntimeOverrides,
+): ResolvedFooterLineSettings {
+	const matchedRule = findMatchingRule(config, repo);
+	const width = overrides.footerLineWidth ?? matchedRule?.footerLineWidth ?? config.footerLineWidth ?? DEFAULT_LINE_WIDTH;
+	const customPattern = sanitizeFooterLinePattern(
+		overrides.footerLinePattern ?? matchedRule?.footerLinePattern ?? config.footerLinePattern,
+	);
+	return {
+		enabled: overrides.footerLine ?? matchedRule?.footerLine ?? config.footerLine ?? false,
+		color: overrides.footerLineColor ?? matchedRule?.footerLineColor ?? config.footerLineColor ?? DEFAULT_LINE_COLOR,
+		pattern: getFooterLinePattern(customPattern, width),
+		width,
+		customPattern,
+		animationEnabled:
+			overrides.footerLineAnimate ?? matchedRule?.footerLineAnimate ?? config.footerLineAnimate ?? true,
+		animationMs:
+			sanitizeFooterLineAnimationIntervalMs(
+				overrides.footerLineAnimationMs ?? matchedRule?.footerLineAnimationMs ?? config.footerLineAnimationMs,
+			) ?? FOOTER_LINE_ANIMATION_INTERVAL_MS,
 	};
 }
 
@@ -578,43 +699,31 @@ function sanitizeFooterLineAnimationIntervalMs(value: number | undefined): numbe
 	return Math.max(80, Math.min(5000, Math.round(value)));
 }
 
-function resolveFooterLineAnimation(
-	config: PeacockConfig,
-	overrides: RuntimeOverrides,
-): FooterLineAnimationOptions {
-	return {
-		enabled: overrides.footerLineAnimate ?? config.footerLineAnimate ?? true,
-		intervalMs:
-			sanitizeFooterLineAnimationIntervalMs(overrides.footerLineAnimationMs) ??
-			sanitizeFooterLineAnimationIntervalMs(config.footerLineAnimationMs) ??
-			FOOTER_LINE_ANIMATION_INTERVAL_MS,
-	};
-}
-
 function getSignature(
 	repo: RepoInfo,
 	identity: ResolvedIdentity,
 	flags: { showStatus: boolean; showBranch: boolean; showTitle: boolean },
-	overrides: RuntimeOverrides,
-	footerLineAnimation: FooterLineAnimationOptions,
+	footerLineSettings: ResolvedFooterLineSettings,
+	toolStripeSettings: ResolvedToolStripeSettings,
 ): string {
 	return JSON.stringify({
 		branch: repo.branch,
-		footerLine: overrides.footerLine,
-		footerLineColor: overrides.footerLineColor,
-		footerLinePattern: overrides.footerLinePattern,
-		footerLineWidth: overrides.footerLineWidth,
-		footerLineAnimate: footerLineAnimation.enabled,
-		footerLineAnimationMs: footerLineAnimation.intervalMs,
+		footerLine: footerLineSettings.enabled,
+		footerLineColor: footerLineSettings.color,
+		footerLinePattern: footerLineSettings.pattern,
+		footerLineWidth: footerLineSettings.width,
+		footerLineAnimate: footerLineSettings.animationEnabled,
+		footerLineAnimationMs: footerLineSettings.animationMs,
 		label: identity.label,
 		showBranch: flags.showBranch,
 		showStatus: flags.showStatus,
 		showTitle: flags.showTitle,
 		source: identity.source,
 		theme: identity.theme,
-		toolStripe: overrides.toolStripe,
-		toolStripeChar: overrides.toolStripeChar,
-		toolStripeColor: overrides.toolStripeColor,
+		toolStripe: toolStripeSettings.enabled,
+		toolStripeChar: toolStripeSettings.char,
+		toolStripeColor: toolStripeSettings.color,
+		toolStripeSide: toolStripeSettings.side,
 	});
 }
 
@@ -703,6 +812,8 @@ function normalizeOverrides(data: RuntimeOverrides): RuntimeOverrides {
 	if (data.toolStripe !== undefined) cleaned.toolStripe = data.toolStripe;
 	if (data.toolStripeColor) cleaned.toolStripeColor = data.toolStripeColor;
 	if (data.toolStripeChar) cleaned.toolStripeChar = data.toolStripeChar;
+	const stripeSide = sanitizeToolStripeSide(data.toolStripeSide);
+	if (stripeSide) cleaned.toolStripeSide = stripeSide;
 	return cleaned;
 }
 
@@ -809,6 +920,8 @@ async function copyEmoji(text: string): Promise<void> {
 // ─── Footer line constants ───────────────────────────────────────────────────
 
 const LINE_COLORS = ["accent", "border", "muted", "dim", "success", "warning", "error"] as const;
+const DEFAULT_LINE_COLOR = LINE_COLORS[2];
+const DEFAULT_LINE_WIDTH = 1;
 
 // ─── Tool stripe constants ───────────────────────────────────────────────────
 
@@ -833,8 +946,15 @@ const STRIPE_CHARS: StripeCharOption[] = [
 	{ label: "pound", char: "#" },
 ];
 
+const STRIPE_SIDES = ["left", "right", "both"] as const satisfies readonly ToolStripeSide[];
 const DEFAULT_STRIPE_CHAR = STRIPE_CHARS[0].char;
 const DEFAULT_STRIPE_COLOR = STRIPE_COLORS[0];
+const DEFAULT_STRIPE_SIDE = STRIPE_SIDES[0];
+const STRIPE_CHAR_MIRRORS: Partial<Record<string, string>> = {
+	"▌": "▐",
+	"▎": "▕",
+	"▸": "◂",
+};
 
 interface LineWidthOption {
 	label: string;
@@ -867,8 +987,11 @@ function getLegacyLineChar(width: number | undefined): string {
 	return LINE_WIDTHS.find((w) => w.width === width)?.char ?? LINE_WIDTHS[0].char;
 }
 
-function getFooterLinePattern(overrides: RuntimeOverrides): string {
-	return sanitizeFooterLinePattern(overrides.footerLinePattern) ?? getLegacyLineChar(overrides.footerLineWidth);
+function getFooterLinePattern(
+	pattern: string | undefined,
+	width: number | undefined,
+): string {
+	return sanitizeFooterLinePattern(pattern) ?? getLegacyLineChar(width);
 }
 
 function rotateFooterLinePattern(pattern: string, phase: number): string {
@@ -930,30 +1053,33 @@ async function showSettingsPanel(
 		// Settings focus: 0=autoAssignTheme, 1=theme, 2=label, 3=status, 4=branch,
 		//   5=title, 6=footerLine, 7=lineColor, 8=linePreset, 9=lineCustom,
 		//   10=lineAnimate, 11=lineAnimationMs,
-		//   12=toolStripe, 13=stripeColor, 14=stripeChar, 15=stripeCustom,
-		//   16=emoji, 17=save, 18=cancel
-		const TOTAL_SETTINGS_OPTIONS = 19;
+		//   12=toolStripe, 13=stripeColor, 14=stripeSide, 15=stripeChar, 16=stripeCustom,
+		//   17=emoji, 18=save, 19=cancel
+		const TOTAL_SETTINGS_OPTIONS = 20;
 		const FOOTER_LINE_ANIMATION_STEP_MS = 40;
 		let focusIndex = 0;
 		const autoAssignThemeOn = () => isAutoAssignThemeEnabled(currentConfig, overrides);
 		const themeRowEnabled = () => autoAssignThemeOn();
-		const footerLineOn = () => overrides.footerLine ?? false;
-		const footerLineAnimation = () => resolveFooterLineAnimation(currentConfig, overrides);
-		const footerLineAnimationOn = () => footerLineAnimation().enabled;
-		const footerLineAnimationMs = () => footerLineAnimation().intervalMs;
-		let lineWidthIdx = LINE_WIDTHS.findIndex((w) => w.width === (overrides.footerLineWidth ?? 1));
+		const footerLineSettings = () => resolveFooterLineSettings(repo, currentConfig, overrides);
+		const footerLineOn = () => footerLineSettings().enabled;
+		const footerLineAnimationOn = () => footerLineSettings().animationEnabled;
+		const footerLineAnimationMs = () => footerLineSettings().animationMs;
+		let lineWidthIdx = LINE_WIDTHS.findIndex((w) => w.width === (footerLineSettings().width ?? DEFAULT_LINE_WIDTH));
 		if (lineWidthIdx === -1) lineWidthIdx = 0;
 		let lineColorIdx = Math.max(0,
-			LINE_COLORS.indexOf((overrides.footerLineColor ?? "muted") as any));
-		const customLinePattern = () => sanitizeFooterLinePattern(overrides.footerLinePattern);
+			LINE_COLORS.indexOf(footerLineSettings().color as any));
+		const customLinePattern = () => footerLineSettings().customPattern;
 
 		// Tool stripe state
-		const toolStripeOn = () => overrides.toolStripe ?? false;
+		const toolStripeSettings = () => resolveToolStripeSettings(repo, currentConfig, overrides);
+		const toolStripeOn = () => toolStripeSettings().enabled;
+		const toolStripeSide = () => toolStripeSettings().side;
 		let stripeColorIdx = Math.max(0,
-			STRIPE_COLORS.indexOf((overrides.toolStripeColor ?? DEFAULT_STRIPE_COLOR) as any));
-		let stripeCharIdx = STRIPE_CHARS.findIndex((s) => s.char === sanitizeStripeChar(overrides.toolStripeChar));
+			STRIPE_COLORS.indexOf(toolStripeSettings().color as any));
+		let stripeSideIdx = Math.max(0, STRIPE_SIDES.indexOf(toolStripeSide()));
+		let stripeCharIdx = STRIPE_CHARS.findIndex((s) => s.char === toolStripeSettings().char);
 		if (stripeCharIdx === -1) stripeCharIdx = 0;
-		let stripeCustomBuffer = overrides.toolStripeChar ?? "";
+		let stripeCustomBuffer = toolStripeSettings().char;
 		let stripeCustomCursor = 0;
 
 		function isVisibleFocusIndex(index: number): boolean {
@@ -963,7 +1089,7 @@ async function showSettingsPanel(
 			}
 			if (footerLineOn() && !footerLineAnimationOn() && index === 11) return false;
 			if (!toolStripeOn()) {
-				if (index >= 13 && index <= 15) return false;
+				if (index >= 13 && index <= 16) return false;
 			}
 			return true;
 		}
@@ -975,7 +1101,7 @@ async function showSettingsPanel(
 			}
 			if (footerLineOn() && !footerLineAnimationOn() && focusIndex === 11) focusIndex = 10;
 			if (!toolStripeOn()) {
-				if (focusIndex >= 13 && focusIndex <= 15) focusIndex = 12;
+				if (focusIndex >= 13 && focusIndex <= 16) focusIndex = 12;
 			}
 		}
 
@@ -1103,7 +1229,7 @@ async function showSettingsPanel(
 			add(`${focusIndex === 6 ? theme.fg("accent", "▸") : " "} ${lineCh} ${theme.fg("dim", "Footer line:")}${focusIndex === 6 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
 			if (footerLineOn()) {
 				// 8. Line color
-				const lc = LINE_COLORS[lineColorIdx] ?? "muted";
+				const lc = LINE_COLORS[lineColorIdx] ?? DEFAULT_LINE_COLOR;
 				const lcSwatch = theme.fg(lc as any, "───");
 				add(`${focusIndex === 7 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${lcSwatch} ${lc}${focusIndex === 7 ? theme.fg("dim", "  ← →") : ""}`);
 				// 9. Line preset
@@ -1129,23 +1255,27 @@ async function showSettingsPanel(
 			if (toolStripeOn()) {
 				// 13. Stripe color
 				const sc = STRIPE_COLORS[stripeColorIdx] ?? DEFAULT_STRIPE_COLOR;
-				const scSwatch = theme.fg(sc as any, sanitizeStripeChar(overrides.toolStripeChar).repeat(3));
+				const stripeSampleChar = toolStripeSettings().char;
+				const scSwatch = theme.fg(sc as any, `${stripeSampleChar}${getMirroredToolStripeChar(stripeSampleChar)}`);
 				add(`${focusIndex === 13 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Color:")}  ${scSwatch} ${sc}${focusIndex === 13 ? theme.fg("dim", "  ← →") : ""}`);
-				// 14. Stripe char preset
+				// 14. Stripe side
+				add(`${focusIndex === 14 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Side:")}  ${toolStripeSide()}${focusIndex === 14 ? theme.fg("dim", "  ← →") : ""}`);
+				// 15. Stripe char preset
 				const schar = STRIPE_CHARS[stripeCharIdx] ?? STRIPE_CHARS[0];
-				add(`${focusIndex === 14 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Char:")}  ${schar.char} ${schar.label}${focusIndex === 14 ? theme.fg("dim", "  ← →") : ""}`);
-				// 15. Custom stripe char
-				const customStripeChar = overrides.toolStripeChar && !STRIPE_CHARS.some(s => s.char === overrides.toolStripeChar)
-					? overrides.toolStripeChar
+				add(`${focusIndex === 15 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Char:")}  ${schar.char} ${schar.label}${focusIndex === 15 ? theme.fg("dim", "  ← →") : ""}`);
+				// 16. Custom stripe char
+				const effectiveStripeChar = toolStripeSettings().char;
+				const customStripeChar = !STRIPE_CHARS.some((s) => s.char === effectiveStripeChar)
+					? effectiveStripeChar
 					: undefined;
 				const customStripeText = customStripeChar ?? theme.fg("muted", "(preset active)");
-				add(`${focusIndex === 15 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customStripeText}${focusIndex === 15 ? theme.fg("dim", "  Enter to edit") : ""}`);
+				add(`${focusIndex === 16 ? theme.fg("accent", "▸") : " "}   ${theme.fg("dim", "Custom:")}  ${customStripeText}${focusIndex === 16 ? theme.fg("dim", "  Enter to edit") : ""}`);
 			}
 			lines.push("");
 
-			// 16. Emoji badge
+			// 17. Emoji badge
 			const curEmoji = overrides.emoji ?? "🦚";
-			add(`${focusIndex === 16 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 16 ? theme.fg("dim", "  Enter to pick") : ""}`);
+			add(`${focusIndex === 17 ? theme.fg("accent", "▸") : " "} ${theme.fg("dim", "Emoji badge:")}  ${curEmoji}${focusIndex === 17 ? theme.fg("dim", "  Enter to pick") : ""}`);
 			lines.push("");
 
 			// Preview
@@ -1155,15 +1285,19 @@ async function showSettingsPanel(
 			const bt = flags.showBranch && repo.branch ? theme.fg("dim", ` · ${repo.branch}`) : "";
 			add(`   ${theme.fg("accent", previewBadge)}${bt}`);
 			if (footerLineOn()) {
-				const lineColor = overrides.footerLineColor ?? "muted";
-				add(`   ${theme.fg(lineColor as any, buildFooterLine(getFooterLinePattern(overrides), Math.max(8, width - 3)))}`);
+				const lineSettings = footerLineSettings();
+				add(`   ${theme.fg(lineSettings.color as any, buildFooterLine(lineSettings.pattern, Math.max(8, width - 3)))}`);
 				add(`   ${theme.fg("dim", `Animation: ${footerLineAnimationOn() ? `active-only · ${footerLineAnimationMs()}ms` : "off"}`)}`);
 			}
 			if (toolStripeOn()) {
-				const sColor = overrides.toolStripeColor || DEFAULT_STRIPE_COLOR;
-				const sChar = sanitizeStripeChar(overrides.toolStripeChar);
-				add(`   ${theme.fg(sColor as any, sChar)} ${theme.fg("dim", "read src/index.ts")}`);
-				add(`   ${theme.fg(sColor as any, sChar)} ${theme.fg("dim", "42 lines")}`);
+				const decoration = getToolStripeDecoration(theme, toolStripeSettings());
+				const renderToolStripePreviewLine = (text: string) => {
+					const childWidth = Math.max(1, width - 3 - visibleWidth(decoration.prefix) - visibleWidth(decoration.suffix));
+					return `   ${decoration.prefix}${truncateToWidth(theme.fg("dim", text), childWidth, "", true)}${decoration.suffix}`;
+				};
+				add(renderToolStripePreviewLine("read src/index.ts"));
+				add(renderToolStripePreviewLine("42 lines"));
+				add(`   ${theme.fg("dim", `Side: ${toolStripeSide()}`)}`);
 			}
 			if (flags.showTitle) {
 				const pfx = currentConfig.titlePrefix ?? DEFAULT_CONFIG.titlePrefix;
@@ -1171,9 +1305,9 @@ async function showSettingsPanel(
 			}
 			lines.push("");
 
-			// 17. Apply, 18. Cancel
-			add(sel(17, theme.fg("success", "✓ Apply & close")));
-			add(sel(18, theme.fg("muted", "✕ Cancel")));
+			// 18. Apply, 19. Cancel
+			add(sel(18, theme.fg("success", "✓ Apply & close")));
+			add(sel(19, theme.fg("muted", "✕ Cancel")));
 			lines.push("");
 			add(theme.fg("dim", " ↑↓ navigate · Enter select · Esc cancel"));
 
@@ -1241,7 +1375,7 @@ async function showSettingsPanel(
 			add(theme.fg("accent", theme.bold(" ── Edit footer line pattern ──")));
 			lines.push("");
 			add(theme.fg("dim", "   Repeated to fill the footer line width, e.g. #-# or =="));
-			add(theme.fg("dim", "   Leave empty to fall back to the selected preset."));
+			add(theme.fg("dim", "   Leave empty to fall back to config or the selected preset."));
 			lines.push("");
 			const before = linePatternBuffer.slice(0, linePatternCursor);
 			const after = linePatternBuffer.slice(linePatternCursor);
@@ -1254,8 +1388,8 @@ async function showSettingsPanel(
 		function renderStripeCharEditPage(lines: string[], add: (s: string) => void, _width: number): string[] {
 			add(theme.fg("accent", theme.bold(" ── Edit tool stripe char ──")));
 			lines.push("");
-			add(theme.fg("dim", "   Character(s) used as the left accent stripe on tool blocks."));
-			add(theme.fg("dim", "   Leave empty to fall back to the selected preset."));
+			add(theme.fg("dim", "   Character(s) used for the accent stripe on tool blocks."));
+			add(theme.fg("dim", "   Leave empty to fall back to config or the selected preset."));
 			lines.push("");
 			const before = stripeCustomBuffer.slice(0, stripeCustomCursor);
 			const after = stripeCustomBuffer.slice(stripeCustomCursor);
@@ -1431,10 +1565,13 @@ async function showSettingsPanel(
 					stripeColorIdx = (stripeColorIdx - 1 + STRIPE_COLORS.length) % STRIPE_COLORS.length;
 					overrides.toolStripeColor = STRIPE_COLORS[stripeColorIdx];
 				} else if (focusIndex === 14 && toolStripeOn()) {
+					stripeSideIdx = (stripeSideIdx - 1 + STRIPE_SIDES.length) % STRIPE_SIDES.length;
+					overrides.toolStripeSide = STRIPE_SIDES[stripeSideIdx];
+				} else if (focusIndex === 15 && toolStripeOn()) {
 					stripeCharIdx = (stripeCharIdx - 1 + STRIPE_CHARS.length) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
+				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1460,10 +1597,13 @@ async function showSettingsPanel(
 					stripeColorIdx = (stripeColorIdx + 1) % STRIPE_COLORS.length;
 					overrides.toolStripeColor = STRIPE_COLORS[stripeColorIdx];
 				} else if (focusIndex === 14 && toolStripeOn()) {
+					stripeSideIdx = (stripeSideIdx + 1) % STRIPE_SIDES.length;
+					overrides.toolStripeSide = STRIPE_SIDES[stripeSideIdx];
+				} else if (focusIndex === 15 && toolStripeOn()) {
 					stripeCharIdx = (stripeCharIdx + 1) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14) {
+				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
 					onChange(overrides);
 					saveOverrides(pi, overrides, repo.repoName);
 				}
@@ -1531,29 +1671,30 @@ async function showSettingsPanel(
 					if (!overrides.toolStripe) {
 						overrides.toolStripeColor = undefined;
 						overrides.toolStripeChar = undefined;
+						overrides.toolStripeSide = undefined;
 					}
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); clampFocus(); refresh();
 					return;
 				}
-				if (focusIndex === 15 && toolStripeOn()) {
-					stripeCustomBuffer = overrides.toolStripeChar ?? "";
+				if (focusIndex === 16 && toolStripeOn()) {
+					stripeCustomBuffer = toolStripeSettings().char;
 					stripeCustomCursor = stripeCustomBuffer.length;
 					page = "stripeCharEdit";
 					refresh();
 					return;
 				}
-				if (focusIndex === 16) {
+				if (focusIndex === 17) {
 					page = "emoji";
 					emojiCategoryIdx = 0;
 					emojiCursorIdx = 0;
 					refresh();
 					return;
 				}
-				if (focusIndex === 17) {
+				if (focusIndex === 18) {
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
 					return;
 				}
-				if (focusIndex === 18) {
+				if (focusIndex === 19) {
 					done();
 					return;
 				}
@@ -1578,7 +1719,7 @@ async function showSettingsPanel(
 					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
-					focusIndex = 16; // back to emoji badge item
+					focusIndex = 17; // back to emoji badge item
 					refresh();
 				}
 				return;
@@ -1612,10 +1753,14 @@ async function showSettingsPanel(
 // ─── Extension Factory ───────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	registerStripedBuiltInTools(pi, () => runtimeOverrides);
-
 	let lastSignature = "";
 	let runtimeOverrides: RuntimeOverrides = {};
+	let toolStripeSettings: ResolvedToolStripeSettings = {
+		enabled: false,
+		color: DEFAULT_STRIPE_COLOR,
+		char: DEFAULT_STRIPE_CHAR,
+		side: DEFAULT_STRIPE_SIDE,
+	};
 	let availableThemeNames = [...AUTO_THEMES] as string[];
 	let currentRepoName = "";
 	const reportedConfigErrors = new Set<string>();
@@ -1626,8 +1771,10 @@ export default function (pi: ExtensionAPI) {
 	let footerAnimationEnabled = false;
 	let footerAnimationAllowed = true;
 	let footerAnimationIntervalMs = FOOTER_LINE_ANIMATION_INTERVAL_MS;
-	let footerAnimationLineColor: string = "muted";
-	let footerAnimationLinePattern = LINE_WIDTHS[0].char;
+	let footerAnimationLineColor: string = DEFAULT_LINE_COLOR;
+	let footerAnimationLinePattern = getLegacyLineChar(DEFAULT_LINE_WIDTH);
+
+	registerStripedBuiltInTools(pi, () => toolStripeSettings);
 
 	function renderFooterLineWidget(ctx: ExtensionContext): void {
 		if (!footerAnimationEnabled) {
@@ -1701,8 +1848,9 @@ export default function (pi: ExtensionAPI) {
 		);
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		const flags = mergeFlags(config, runtimeOverrides);
-		const footerLineAnimation = resolveFooterLineAnimation(config, runtimeOverrides);
-		const signature = getSignature(repo, identity, flags, runtimeOverrides, footerLineAnimation);
+		const footerLineSettings = resolveFooterLineSettings(repo, config, runtimeOverrides);
+		toolStripeSettings = resolveToolStripeSettings(repo, config, runtimeOverrides);
+		const signature = getSignature(repo, identity, flags, footerLineSettings, toolStripeSettings);
 
 		if (!force && signature === lastSignature) {
 			return { configPaths, identity, repo, signature };
@@ -1718,7 +1866,7 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Footer: status badge + optional horizontal line ABOVE footer
-		const hasLine = runtimeOverrides.footerLine && flags.showStatus;
+		const hasLine = footerLineSettings.enabled && flags.showStatus;
 		const badgeText = getStatusText(ctx, repo, identity, flags, runtimeOverrides.emoji);
 
 		if (badgeText) {
@@ -1729,12 +1877,12 @@ export default function (pi: ExtensionAPI) {
 
 		footerAnimationCtx = ctx;
 		footerAnimationEnabled = hasLine;
-		footerAnimationAllowed = footerLineAnimation.enabled;
-		const nextFooterAnimationIntervalMs = footerLineAnimation.intervalMs;
+		footerAnimationAllowed = footerLineSettings.animationEnabled;
+		const nextFooterAnimationIntervalMs = footerLineSettings.animationMs;
 		const footerAnimationNeedsRestart = footerAnimationTimer !== null && footerAnimationIntervalMs !== nextFooterAnimationIntervalMs;
 		footerAnimationIntervalMs = nextFooterAnimationIntervalMs;
-		footerAnimationLineColor = runtimeOverrides.footerLineColor ?? "muted";
-		footerAnimationLinePattern = getFooterLinePattern(runtimeOverrides);
+		footerAnimationLineColor = footerLineSettings.color;
+		footerAnimationLinePattern = footerLineSettings.pattern;
 		if (hasLine) {
 			if (footerAnimationNeedsRestart) {
 				stopFooterLineAnimation(false);

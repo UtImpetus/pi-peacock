@@ -87,7 +87,7 @@ It does **not** try to recolor your terminal application's native window chrome,
 
 - **optional automatic repo coloring** you can enable per repo from `/peacock`
 - **stable theme assignment** by hashing the git repo name when auto-assign is enabled
-- **accent-striped tool blocks** — every built-in tool (read, bash, edit, write, grep, find, ls) can show a colored left accent stripe, fully customizable: toggle on/off, choose color from theme palette, pick a preset character, or type a custom one. The stripe color matches the active peacock theme by default, giving each project a distinctive look at a glance
+- **accent-striped tool blocks** — every built-in tool (read, bash, edit, write, grep, find, ls) can show a colored accent stripe, fully customizable: toggle on/off, choose color from theme palette, choose the side (`left`, `right`, or `both`), pick a preset character, or type a custom one. The stripe color matches the active peacock theme by default, giving each project a distinctive look at a glance
 - **bundled peacock themes** ready to use out of the box, plus repo-level switching to any theme installed in pi
 - **per-repo overrides** via `peacock.json`
 - **project + global config** support
@@ -217,15 +217,27 @@ By default, `pi-peacock` preserves your current pi theme. If you want repo-speci
   "showStatus": true,
   "showTitle": true,
   "titlePrefix": "π",
+  "footerLine": true,
+  "footerLineColor": "accent",
+  "footerLinePattern": "┄",
   "footerLineAnimate": true,
   "footerLineAnimationMs": 320,
+  "toolStripe": true,
+  "toolStripeColor": "accent",
+  "toolStripeChar": "▌",
+  "toolStripeSide": "both",
   "rules": [
     {
       "repo": "nearbygpt-backend",
       "theme": "peacock-amber",
       "label": "backend",
       "title": "π {label} · {branch}",
-      "status": "backend"
+      "status": "backend",
+      "footerLine": true,
+      "footerLineColor": "warning",
+      "footerLineWidth": 5,
+      "toolStripe": true,
+      "toolStripeSide": "right"
     },
     {
       "pathIncludes": ["/work/client-a/", "/work/client-b/"],
@@ -246,6 +258,18 @@ Each rule can contain:
 - `label`: short name used for footer/title
 - `title`: custom title template
 - `status`: custom footer label/template
+- `footerLine`: enable or disable the footer line for that matched repo
+- `footerLineColor`: footer-line color token from the active theme palette
+- `footerLinePattern`: repeated footer-line pattern
+- `footerLineWidth`: legacy preset width selector for the footer line
+- `footerLineAnimate`: enable or disable footer-line animation for that matched repo
+- `footerLineAnimationMs`: footer-line animation step interval in milliseconds
+- `toolStripe`: enable or disable tool stripes for that matched repo
+- `toolStripeColor`: stripe color token from the active theme palette
+- `toolStripeChar`: stripe character/pattern
+- `toolStripeSide`: `left`, `right`, or `both`
+
+Top-level config can also set `footerLine`, `footerLineColor`, `footerLinePattern`, `footerLineWidth`, `footerLineAnimate`, `footerLineAnimationMs`, `toolStripe`, `toolStripeColor`, `toolStripeChar`, and `toolStripeSide` as defaults for the current repo. Runtime changes made in `/peacock` still override file-based settings.
 
 Animation-related config:
 
@@ -321,6 +345,6 @@ The package already includes the `pi-package` keyword so it is ready to be distr
 
 - If no rule matches, `pi-peacock` keeps your current pi theme unless auto-assign is enabled.
 - If a repo has no persisted settings yet, `pi-peacock` assigns a random emoji once and then keeps it for that repo.
-- Tool block accent stripes are off by default. Enable them from `/peacock` → **Tool stripe**. Once enabled, they use the theme's `accent` color by default. You can customize the color, pick from preset stripe characters (block, solid, bar, thin, dot, dash, double, arrow, diamond, star, pound), or type a custom character. Settings persist per repo.
+- Tool block accent stripes are off by default. Enable them from `/peacock` → **Tool stripe**. Once enabled, they use the theme's `accent` color by default. You can customize the color, choose whether the stripe renders on the `left`, `right`, or `both` sides of tool blocks, pick from preset stripe characters (block, solid, bar, thin, dot, dash, double, arrow, diamond, star, pound), or type a custom character. Settings persist per repo.
 - If you switch git branches during a session, the footer/title updates after the current turn.
 - If auto-assign or a theme override is active and you manually change theme in pi, `pi-peacock` will re-apply when identity changes or when you run `/peacock`.
