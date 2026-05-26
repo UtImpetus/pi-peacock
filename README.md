@@ -16,25 +16,47 @@ So instead of every pi session looking the same, your backend repo can feel oran
 
 ## Screenshots
 
-_All screenshots below are sanitized `termtosvg` captures taken from temporary demo repos._
+_All screenshots below are sanitized SVG terminal captures taken from temporary demo repos._
 
-### Auto-assigned workspace identity
+### Settings window
 
-![pi-peacock screenshot](./docs/screenshot.svg)
+#### Auto-assigned workspace identity
 
-_A repo can get its own badge, title, and bundled theme automatically, without requiring a manual per-project mapping._
+![pi-peacock auto settings](./docs/auto-settings.svg)
 
-### Rule-based identity from config
+_Auto-assign theme can give a repo its own color identity immediately, while still letting you inspect and tweak the active settings from `/peacock`._
 
-![pi-peacock rule-based config](./docs/screenshot-rule-based.svg)
+#### Rule-based identity from config
 
-_Project-local `.pi/peacock.json` can rename a repo and apply a stable identity based on matching rules._
+![pi-peacock rule settings](./docs/rule-settings.svg)
 
-### Minimal badge with custom footer separator
+_Project-local `.pi/peacock.json` can rename a repo, choose a fixed bundled theme, and make the rule-based identity visible directly in the settings panel._
 
-![pi-peacock footer line customization](./docs/screenshot-footer-line.svg)
+#### Compact footer and tool-stripe customization
 
-_Runtime overrides can create a more compact badge with a custom emoji, hidden branch name, and patterned footer separator._
+![pi-peacock footer settings](./docs/footer-settings.svg)
+
+_Runtime overrides can produce a compact badge with a custom emoji, hidden branch name, patterned footer line, and colored tool stripe._
+
+### Whole terminal demos
+
+#### Auto-assigned identity during a tool-based run
+
+![pi-peacock auto terminal demo](./docs/auto-demo.svg)
+
+_The active peacock theme carries through the whole terminal while pi is using tools, with the repo badge and title staying visible._
+
+#### Rule-based identity during a tool-based run
+
+![pi-peacock rule terminal demo](./docs/rule-demo.svg)
+
+_Rule-based repo naming and theming remain visible during a real run, including tool calls and the final response._
+
+#### Compact footer demo during a tool-based run
+
+![pi-peacock footer terminal demo](./docs/footer-demo.svg)
+
+_A compact footer style can keep the workspace identity obvious while taking less space in the terminal UI._
 
 ## What this package is for
 

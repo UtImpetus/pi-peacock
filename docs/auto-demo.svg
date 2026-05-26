@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="terminal" baseProfile="full" viewBox="0 0 800 478" width="800" version="1.1">
+    <defs>
+        <termtosvg:template_settings xmlns:termtosvg="https://github.com/nbedos/termtosvg">
+            <termtosvg:screen_geometry columns="100" rows="28"/>
+            <termtosvg:animation type="css"/>
+        </termtosvg:template_settings>
+        <style type="text/css" id="generated-style"><![CDATA[#screen {
+                font-family: 'DejaVu Sans Mono', monospace;
+                font-style: normal;
+                font-size: 14px;
+            }
+
+        text {
+            dominant-baseline: text-before-edge;
+            white-space: pre;
+        }
+    ]]></style>
+        <style type="text/css" id="user-style">
+            /* The colors defined below are the default 16 colors used for rendering text of the terminal. Adjust
+               them as needed.
+               PowerShell colors based on https://en.wikipedia.org/wiki/ANSI_escape_code#Colors */
+            .foreground {fill: #cccccc;}
+            .background {fill: #0c0c0c;}
+            .color0 {fill: #0c0c0c;}
+            .color1 {fill: #c50f1f;}
+            .color2 {fill: #13a10e;}
+            .color3 {fill: #c19c00;}
+            .color4 {fill: #0037da;}
+            .color5 {fill: #881798;}
+            .color6 {fill: #3a96dd;}
+            .color7 {fill: #cccccc;}
+            .color8 {fill: #767676;}
+            .color9 {fill: #e74856;}
+            .color10 {fill: #16c60c;}
+            .color11 {fill: #f9f1a5;}
+            .color12 {fill: #3b78ff;}
+            .color13 {fill: #b4009e;}
+            .color14 {fill: #61d6d6;}
+            .color15 {fill: #f2f2f2;}
+        </style>
+    </defs>
+    <svg id="screen" width="800" height="476" viewBox="0 0 800 476" preserveAspectRatio="xMidYMin slice">
+    <rect class="background" height="100%" width="100%" x="0" y="0"/><defs><g id="g1"><text x="0" textLength="800" class="foreground">                                                                                                    </text></g><g id="g2"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="16" font-weight="bold" fill="#fb923c">ls</text><text x="24" textLength="8" class="foreground"> </text><text x="32" textLength="296" fill="#fb923c">/tmp/pi-peacock-shot-mThYfk/demo-auto</text><text x="328" textLength="472" class="foreground">                                                           </text></g><g id="g3"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="40" fill="#c9a28b">.git/</text><text x="48" textLength="752" class="foreground">                                                                                              </text></g><g id="g4"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="32" fill="#c9a28b">.pi/</text><text x="40" textLength="760" class="foreground">                                                                                               </text></g><g id="g5"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="40" fill="#c9a28b">docs/</text><text x="48" textLength="752" class="foreground">                                                                                              </text></g><g id="g6"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="96" fill="#c9a28b">package.json</text><text x="104" textLength="696" class="foreground">                                                                                       </text></g><g id="g7"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="72" fill="#c9a28b">README.md</text><text x="80" textLength="720" class="foreground">                                                                                          </text></g><g id="g8"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="32" fill="#c9a28b">src/</text><text x="40" textLength="760" class="foreground">                                                                                               </text></g><g id="g9"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="32" font-weight="bold" fill="#fb923c">read</text><text x="40" textLength="8" class="foreground"> </text><text x="48" textLength="376" fill="#fb923c">/tmp/pi-peacock-shot-mThYfk/demo-auto/README.md</text><text x="424" textLength="376" class="foreground">                                               </text></g><g id="g10"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="32" font-weight="bold" fill="#fb923c">read</text><text x="40" textLength="8" class="foreground"> </text><text x="48" textLength="400" fill="#fb923c">/tmp/pi-peacock-shot-mThYfk/demo-auto/src/index.ts</text><text x="448" textLength="352" class="foreground">                                            </text></g><g id="g11"><text x="0" textLength="8" class="foreground"> </text><text x="8" textLength="8" fill="#fb923c">&#10300;</text><text x="16" textLength="8" class="foreground"> </text><text x="24" textLength="80" fill="#c9a28b">Working...</text><text x="104" textLength="696" class="foreground">                                                                                       </text></g><g id="g12"><text x="0" textLength="640" fill="#fdba74">&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;</text><text x="640" textLength="160" class="foreground">                    </text></g><g id="g13"><text x="0" textLength="8" class="background"> </text><text x="8" textLength="792" class="foreground">                                                                                                   </text></g><g id="g14"><text x="0" textLength="352" fill="#926b58">/tmp/pi-peacock-shot-mThYfk/demo-auto (main)</text><text x="352" textLength="448" class="foreground">                                                        </text></g><g id="g15"><text x="0" textLength="640" fill="#926b58">&#8593;2.4k &#8595;159 0.3%/1.0M (auto)                             deepseek-v4-flash &#8226; high</text><text x="640" textLength="160" class="foreground">                    </text></g><g id="g16"><text x="0" textLength="88" fill="#fb923c">&#9861; demo-auto</text><text x="88" textLength="56" fill="#926b58"> &#183; main</text><text x="144" textLength="656" class="foreground">                                                                                  </text></g></defs><g><use xlink:href="#g1" y="0"/><rect x="0" y="17" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="17"/><rect x="0" y="34" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g2" y="34"/><rect x="0" y="51" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="51"/><rect x="0" y="68" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g3" y="68"/><rect x="0" y="85" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g4" y="85"/><rect x="0" y="102" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g5" y="102"/><rect x="0" y="119" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g6" y="119"/><rect x="0" y="136" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g7" y="136"/><rect x="0" y="153" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g8" y="153"/><rect x="0" y="170" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="170"/><use xlink:href="#g1" y="187"/><rect x="0" y="204" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="204"/><rect x="0" y="221" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g9" y="221"/><rect x="0" y="238" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="238"/><use xlink:href="#g1" y="255"/><rect x="0" y="272" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="272"/><rect x="0" y="289" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g10" y="289"/><rect x="0" y="306" width="640" height="17" fill="#1f2d22"/><use xlink:href="#g1" y="306"/><use xlink:href="#g1" y="323"/><use xlink:href="#g11" y="340"/><use xlink:href="#g1" y="357"/><use xlink:href="#g12" y="374"/><rect x="0" y="391" width="8" height="17" class="foreground"/><use xlink:href="#g13" y="391"/><use xlink:href="#g12" y="408"/><use xlink:href="#g14" y="425"/><use xlink:href="#g15" y="442"/><use xlink:href="#g16" y="459"/></g></svg>
+</svg>
