@@ -1861,7 +1861,11 @@ export default function (pi: ExtensionAPI) {
 			const themeResult = ctx.ui.setTheme(identity.theme);
 			if (!themeResult.success && !reportedThemeErrors.has(identity.theme)) {
 				reportedThemeErrors.add(identity.theme);
-				ctx.ui.notify(`pi-peacock: theme '${identity.theme}' not found`, "warning");
+				// Suppress warning during startup for bundled themes — resources_discover
+				// will retry after theme paths are processed.
+				if (!pendingThemeApply) {
+					ctx.ui.notify(`pi-peacock: theme '${identity.theme}' not found`, "warning");
+				}
 			}
 		}
 
@@ -2101,32 +2105,34 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Discover bundled themes ──────────────────────────────────────────
 
-	// Track whether session_start applied its theme successfully.
-	// On initial startup, resources_discover fires AFTER session_start,
-	// so bundled peacock themes are not yet registered when session_start
-	// tries to switch. We retry theme application in resources_discover
-	// once themes become available.
-	let themeApplied = false;
+	// On initial startup, pi fires session_start before resources_discover.
+	// session_start tries ctx.ui.setTheme() with a bundled peacock theme name,
+	// but the themes are only registered AFTER resources_discover returns its
+	// themePaths and pi processes them. So the setTheme call in session_start
+	// always fails for peacock themes on fresh startup.
+	//
+	// We work around this by deferring a retry to the next event-loop tick
+	// (via setTimeout), by which point pi has registered the theme paths
+	// returned by this handler.
+	let pendingThemeApply = false;
 
 	pi.on("resources_discover", async (_e, ctx) => {
 		const globalThemesDir = path.join(os.homedir(), ".pi", "agent", "themes");
 		if (THEMES_DIR === globalThemesDir) return undefined;
 
-		// If session_start already applied the theme successfully, nothing to do.
-		if (themeApplied) return { themePaths: [THEMES_DIR] };
+		// If session_start already applied the theme (e.g. on resume where
+		// themes were loaded previously), nothing to do.
+		if (!pendingThemeApply) return { themePaths: [THEMES_DIR] };
 
-		// Bundled themes are now registered. Re-apply identity to pick up
-		// any peacock theme that failed during session_start.
+		// Defer theme application to the next event-loop tick. By that time
+		// pi will have processed the themePaths we return below and
+		// registered all bundled peacock themes.
 		if (currentRepoName) {
-			reportedThemeErrors.clear();
-			const applied = await applyIdentity(ctx, true);
-			// Mark as applied if there was no theme to apply, or if setTheme succeeded.
-			if (!applied.identity.theme) {
-				themeApplied = true;
-			} else {
-				availableThemeNames = getAvailableThemeNames(ctx);
-				themeApplied = availableThemeNames.includes(applied.identity.theme);
-			}
+			setTimeout(() => {
+				pendingThemeApply = false;
+				reportedThemeErrors.clear();
+				applyIdentity(ctx, true).catch(() => { /* ctx may be stale */ });
+			}, 0);
 		}
 
 		return { themePaths: [THEMES_DIR] };
@@ -2140,7 +2146,21 @@ export default function (pi: ExtensionAPI) {
 		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
 		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
 		lastSignature = "";
-		themeApplied = false;
+		pendingThemeApply = false;
+
+		// Check whether the resolved theme is already available. On fresh
+		// startup, bundled peacock themes aren't registered yet (that
+		// happens in resources_discover after this handler returns).
+		const { config: startupConfig } = await loadConfig(
+			repo, reportedConfigErrors,
+			(msg: string) => ctx.ui.notify(msg, "warning"),
+		);
+		const startupIdentity = resolveIdentity(repo, startupConfig, runtimeOverrides);
+		if (startupIdentity.theme) {
+			availableThemeNames = getAvailableThemeNames(ctx);
+			pendingThemeApply = !availableThemeNames.includes(startupIdentity.theme);
+		}
+
 		await applyIdentity(ctx);
 	});
 
