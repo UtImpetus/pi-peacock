@@ -2101,9 +2101,34 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Discover bundled themes ──────────────────────────────────────────
 
-	pi.on("resources_discover", async () => {
+	// Track whether session_start applied its theme successfully.
+	// On initial startup, resources_discover fires AFTER session_start,
+	// so bundled peacock themes are not yet registered when session_start
+	// tries to switch. We retry theme application in resources_discover
+	// once themes become available.
+	let themeApplied = false;
+
+	pi.on("resources_discover", async (_e, ctx) => {
 		const globalThemesDir = path.join(os.homedir(), ".pi", "agent", "themes");
 		if (THEMES_DIR === globalThemesDir) return undefined;
+
+		// If session_start already applied the theme successfully, nothing to do.
+		if (themeApplied) return { themePaths: [THEMES_DIR] };
+
+		// Bundled themes are now registered. Re-apply identity to pick up
+		// any peacock theme that failed during session_start.
+		if (currentRepoName) {
+			reportedThemeErrors.clear();
+			const applied = await applyIdentity(ctx, true);
+			// Mark as applied if there was no theme to apply, or if setTheme succeeded.
+			if (!applied.identity.theme) {
+				themeApplied = true;
+			} else {
+				availableThemeNames = getAvailableThemeNames(ctx);
+				themeApplied = availableThemeNames.includes(applied.identity.theme);
+			}
+		}
+
 		return { themePaths: [THEMES_DIR] };
 	});
 
@@ -2115,6 +2140,7 @@ export default function (pi: ExtensionAPI) {
 		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
 		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
 		lastSignature = "";
+		themeApplied = false;
 		await applyIdentity(ctx);
 	});
 
