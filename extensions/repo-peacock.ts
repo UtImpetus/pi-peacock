@@ -38,11 +38,10 @@ import {
 	createReadToolDefinition,
 	createWriteTool,
 	createWriteToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import type {
-	AutocompleteItem,
-	ExtensionAPI,
-	ExtensionContext,
+	Theme,
+	type AutocompleteItem,
+	type ExtensionAPI,
+	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
@@ -556,7 +555,7 @@ function isPeacockThemeName(name: string): boolean {
 }
 
 function getAvailableThemeNames(ctx: ExtensionContext): string[] {
-	const uniqueNames = new Set<string>();
+	const uniqueNames = new Set<string>(AUTO_THEMES);
 	for (const { name } of ctx.ui.getAllThemes()) {
 		if (name) uniqueNames.add(name);
 	}
@@ -566,6 +565,71 @@ function getAvailableThemeNames(ctx: ExtensionContext): string[] {
 		if (aIsPeacock !== bIsPeacock) return aIsPeacock ? -1 : 1;
 		return a.localeCompare(b);
 	});
+}
+
+function resolveVarRefs(value: string, vars: Record<string, string>, visited = new Set<string>()): string {
+	if (!value || value.startsWith("#")) return value;
+	if (visited.has(value)) return value;
+	if (vars[value]) {
+		visited.add(value);
+		return resolveVarRefs(vars[value], vars, visited);
+	}
+	return value;
+}
+
+function resolveThemeJsonColors(
+	colors: Record<string, string>,
+	vars: Record<string, string>,
+): Record<string, string> {
+	const resolved: Record<string, string> = {};
+	for (const [key, value] of Object.entries(colors)) {
+		resolved[key] = resolveVarRefs(value, vars);
+	}
+	return resolved;
+}
+
+function splitFgAndBgColors(resolvedColors: Record<string, string>): {
+	bgColors: Record<string, string>;
+	fgColors: Record<string, string>;
+} {
+	const bgColorKeys = new Set([
+		"selectedBg",
+		"userMessageBg",
+		"customMessageBg",
+		"toolPendingBg",
+		"toolSuccessBg",
+		"toolErrorBg",
+	]);
+	const fgColors: Record<string, string> = {};
+	const bgColors: Record<string, string> = {};
+	for (const [key, value] of Object.entries(resolvedColors)) {
+		if (bgColorKeys.has(key)) bgColors[key] = value;
+		else fgColors[key] = value;
+	}
+	return { bgColors, fgColors };
+}
+
+async function loadBundledTheme(name: string, ctx: ExtensionContext): Promise<Theme | undefined> {
+	if (!isPeacockThemeName(name)) return undefined;
+	const themePath = path.join(THEMES_DIR, `${name}.json`);
+	if (!(await exists(themePath))) return undefined;
+	try {
+		const content = await readFile(themePath, "utf8");
+		const json = JSON.parse(content) as {
+			colors?: Record<string, string>;
+			name?: string;
+			vars?: Record<string, string>;
+		};
+		if (!json.name || !json.colors) return undefined;
+		const resolvedColors = resolveThemeJsonColors(json.colors, json.vars ?? {});
+		const { bgColors, fgColors } = splitFgAndBgColors(resolvedColors);
+		return new Theme(fgColors, bgColors, ctx.ui.theme.getColorMode(), {
+			name: json.name,
+			sourcePath: themePath,
+		});
+	} catch {
+		return undefined;
+	}
 }
 
 function formatThemeListPreview(themeNames: string[], maxItems: number = 12): string {
@@ -1858,7 +1922,14 @@ export default function (pi: ExtensionAPI) {
 
 		// Apply theme when one is assigned. Otherwise preserve the current pi theme.
 		if (identity.theme) {
-			const themeResult = ctx.ui.setTheme(identity.theme);
+			const bundled = await loadBundledTheme(identity.theme, ctx);
+			// If pi fell back to dark because it couldn't load a previously persisted
+			// peacock theme name, overwrite settings with dark so the next startup
+			// doesn't try to load the unavailable peacock theme again.
+			if (bundled && ctx.ui.theme.name === "dark") {
+				ctx.ui.setTheme("dark");
+			}
+			const themeResult = bundled ? ctx.ui.setTheme(bundled) : ctx.ui.setTheme(identity.theme);
 			if (!themeResult.success && !reportedThemeErrors.has(identity.theme)) {
 				reportedThemeErrors.add(identity.theme);
 				// Suppress warning during startup for bundled themes — resources_discover
@@ -1928,8 +1999,7 @@ export default function (pi: ExtensionAPI) {
 			if (!choice) return;
 			runtimeOverrides.theme = choice;
 		} else {
-			const tr = ctx.ui.setTheme(name);
-			if (!tr.success) {
+			if (!availableThemes.includes(name)) {
 				ctx.ui.notify(
 					`pi-peacock: theme '${name}' not found. Installed themes: ${formatThemeListPreview(availableThemes)}`,
 					"warning",
@@ -2105,15 +2175,16 @@ export default function (pi: ExtensionAPI) {
 
 	// ── Discover bundled themes ──────────────────────────────────────────
 
-	// On initial startup, pi fires session_start before resources_discover.
-	// session_start tries ctx.ui.setTheme() with a bundled peacock theme name,
-	// but the themes are only registered AFTER resources_discover returns its
-	// themePaths and pi processes them. So the setTheme call in session_start
-	// always fails for peacock themes on fresh startup.
-	//
-	// We work around this by deferring a retry to the next event-loop tick
-	// (via setTimeout), by which point pi has registered the theme paths
-	// returned by this handler.
+	// Bundled peacock themes are applied via Theme instances loaded directly
+	// from the package's theme files. This avoids relying on pi's theme
+	// registry being populated before extensions are initialized, and it
+	// prevents pi from persisting a peacock theme name to settings. Since
+	// v0.54.2, pi persists theme names set via ctx.ui.setTheme(name) to
+	// settings and tries to reload them at startup before extension theme
+	// paths are registered, producing a "Theme not found" error. Using
+	// ctx.ui.setTheme(ThemeInstance) applies the theme without persisting the
+	// name, so the next startup loads the user's previous base theme instead
+	// and pi-peacock re-applies the peacock theme normally.
 	let pendingThemeApply = false;
 
 	pi.on("resources_discover", async (_e, ctx) => {
