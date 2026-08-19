@@ -71,7 +71,10 @@
     "thinkingMedium": "accent",
     "thinkingHigh": "borderAccent",
     "thinkingXhigh": "#ff5d73",
-    "bashMode": "accent"
+    "bashMode": "accent",
+    "scrollbarThumb": "selectedBg",
+    "searchMatchBg": "selectedBg",
+    "searchMatchText": ""
   },
   "export": {
     "pageBg": "#0b1718",

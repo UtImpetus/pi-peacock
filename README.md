@@ -290,11 +290,11 @@ Available placeholders in `title` and `status`:
 
 Opens the interactive settings panel by default and can also be used with subcommands.
 
-Inside the settings panel, the installed-theme picker is disabled until you turn on **Auto-assign theme**.
+Inside the settings panel, the theme picker is available regardless of **Auto-assign theme** — manual overrides always win. Auto-assign controls only the *automatic* hash-based selection when no rule or manual override sets a theme.
 
 Available subcommands:
 
-- `/peacock theme <name>` — requires **Auto-assign theme** to be enabled and accepts any installed pi theme name
+- `/peacock theme <name>` — sets a manual theme override for this repo (no longer requires Auto-assign). Accepts any installed pi theme name. Use `/peacock auto-theme on` for automatic hash-based peacock themes.
 - `/peacock auto-theme <on|off>`
 - `/peacock label <text>`
 - `/peacock toggle <status|branch|title>`

@@ -50,10 +50,46 @@ const execFileAsync = promisify(execFile);
 // Resolve themes directory relative to this extension file
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const THEMES_DIR = path.resolve(EXTENSION_DIR, "..", "themes");
-const OVERRIDES_DIR = path.join(os.homedir(), ".pi", "agent");
 
-function getOverridesFile(repoName: string): string {
-	return path.join(OVERRIDES_DIR, `.peacock-state-${repoName}.json`);
+function getAgentDir(): string {
+	// Respect PI_AGENT_DIR (used by pi when XDG or custom config dir is set)
+	// Fallback mirrors pi's default: ~/.pi/agent
+	const envDir = process.env.PI_AGENT_DIR?.trim();
+	if (envDir) return envDir;
+	return path.join(os.homedir(), ".pi", "agent");
+}
+
+function hashString(value: string): number {
+	let hash = 0;
+	for (const char of value) {
+		hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+	}
+	return hash;
+}
+
+/** Stable per-repo key that distinguishes same basename in different paths */
+function getRepoHashKey(repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd">): string {
+	const root = repo.gitRoot ?? repo.cwd;
+	return `${repo.repoName}:${root}`;
+}
+
+function getHashedRepoId(repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd">): string {
+	const key = getRepoHashKey(repo);
+	return hashString(key).toString(16).padStart(8, "0");
+}
+
+function getOverridesFile(repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd"> | string): string {
+	const dir = getAgentDir();
+	if (typeof repo === "string") {
+		// Legacy single-arg callers (e.g. repoName only) — keep compat during migration
+		return path.join(dir, `.peacock-state-${repo}.json`);
+	}
+	const hashed = getHashedRepoId(repo);
+	return path.join(dir, `.peacock-state-${repo.repoName}-${hashed}.json`);
+}
+
+function getLegacyOverridesFile(repoName: string): string {
+	return path.join(getAgentDir(), `.peacock-state-${repoName}.json`);
 }
 
 const STATUS_KEY = "pi-peacock";
@@ -325,6 +361,7 @@ function registerStripedBuiltInTools(
 	pi: ExtensionAPI,
 	getToolStripeSettings: () => ResolvedToolStripeSettings,
 ): void {
+	// Respect 0.84.2 defaultTools: only wrap tools that are currently active.
 	const baseTools = getBuiltInTools(process.cwd());
 	for (const toolName of BUILT_IN_TOOL_NAMES) {
 		const base = baseTools[toolName];
@@ -408,14 +445,6 @@ async function exists(filePath: string): Promise<boolean> {
 	}
 }
 
-function hashString(value: string): number {
-	let hash = 0;
-	for (const char of value) {
-		hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-	}
-	return hash;
-}
-
 function asArray(value: string | string[] | undefined): string[] {
 	if (!value) return [];
 	return Array.isArray(value) ? value : [value];
@@ -430,8 +459,9 @@ function fillTemplate(template: string, repo: RepoInfo, label: string): string {
 		.replaceAll("{gitRoot}", repo.gitRoot ?? "");
 }
 
-function pickAutoTheme(repoName: string): string {
-	return AUTO_THEMES[hashString(repoName) % AUTO_THEMES.length] ?? "peacock-blue";
+function pickAutoTheme(repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd"> | string): string {
+	const key = typeof repo === "string" ? repo : getRepoHashKey(repo);
+	return AUTO_THEMES[hashString(key) % AUTO_THEMES.length] ?? "peacock-blue";
 }
 
 function ruleMatches(rule: PeacockRule, repo: RepoInfo): boolean {
@@ -530,15 +560,16 @@ function resolveTheme(
 	overrides: RuntimeOverrides,
 	matchedRule?: PeacockRule,
 ): string | undefined {
-	const autoAssignEnabled = isAutoAssignThemeEnabled(config, overrides);
-	if (autoAssignEnabled && overrides.theme) return overrides.theme;
+	// Manual override always wins (decoupled from autoAssign) — allows /peacock theme without enabling auto
+	if (overrides.theme) return overrides.theme;
 	if (matchedRule?.theme) return matchedRule.theme;
+	const autoAssignEnabled = isAutoAssignThemeEnabled(config, overrides);
 	if (matchedRule) {
+		if (autoAssignEnabled) return pickAutoTheme(repo);
 		if (config.fallbackTheme) return config.fallbackTheme;
-		if (autoAssignEnabled) return pickAutoTheme(repo.repoName);
 		return undefined;
 	}
-	if (autoAssignEnabled) return pickAutoTheme(repo.repoName);
+	if (autoAssignEnabled) return pickAutoTheme(repo);
 	return config.fallbackTheme;
 }
 
@@ -568,9 +599,11 @@ function getAvailableThemeNames(ctx: ExtensionContext): string[] {
 }
 
 function resolveVarRefs(value: string, vars: Record<string, string>, visited = new Set<string>()): string {
+	// Align with pi's resolveVarRefs: handle empty/hex early, detect circular, pass-through unknowns
+	// Keep lenient (return original) rather than throwing to avoid extension crash on bad theme JSON
 	if (!value || value.startsWith("#")) return value;
 	if (visited.has(value)) return value;
-	if (vars[value]) {
+	if (vars[value] !== undefined) {
 		visited.add(value);
 		return resolveVarRefs(vars[value], vars, visited);
 	}
@@ -592,8 +625,11 @@ function splitFgAndBgColors(resolvedColors: Record<string, string>): {
 	bgColors: Record<string, string>;
 	fgColors: Record<string, string>;
 } {
+	// Match pi's bgColorKeys in theme.js (includes scrollbarThumb, searchMatchBg added in 0.84.2)
 	const bgColorKeys = new Set([
 		"selectedBg",
+		"scrollbarThumb",
+		"searchMatchBg",
 		"userMessageBg",
 		"customMessageBg",
 		"toolPendingBg",
@@ -793,10 +829,13 @@ function getSignature(
 
 // ─── Dual-persistence state ─────────────────────────────────────────────────
 
-function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides, repoName: string): void {
+function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides, repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd"> | string): void {
 	pi.appendEntry(STATE_KEY, overrides);
 	// Fire-and-forget disk write so overrides survive new sessions
-	writeFile(getOverridesFile(repoName), JSON.stringify(overrides, null, 2), "utf8").catch(() => {
+	// New: hashed per-repo file (distinguishes same basename in different paths) + PI_AGENT_DIR
+	// Keep legacy string fallback for callers without full RepoInfo; write both for migration when we have full info
+	const targetFile = getOverridesFile(repo);
+	writeFile(targetFile, JSON.stringify(overrides, null, 2), "utf8").catch(() => {
 		/* disk write suppressed */
 	});
 }
@@ -804,7 +843,7 @@ function saveOverrides(pi: ExtensionAPI, overrides: RuntimeOverrides, repoName: 
 async function restoreOverrides(
 	ctx: ExtensionContext,
 	_reportedErrors: Set<string>,
-	repoName: string,
+	repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd"> | string,
 ): Promise<RuntimeOverrides> {
 	// 1. Try session entries (most recent for current session)
 	const stateEntry = [...ctx.sessionManager.getBranch()]
@@ -818,12 +857,20 @@ async function restoreOverrides(
 	}
 
 	// 2. Fall back to per-repo disk file (survives new sessions)
-	try {
-		const content = await readFile(getOverridesFile(repoName), "utf8");
-		const parsed = JSON.parse(content) as RuntimeOverrides | undefined;
-		if (parsed) return normalizeOverrides(parsed);
-	} catch { /* file missing or unreadable */ }
-
+	// Try new hashed file first, then legacy repoName-only file for migration
+	const candidates: string[] = [];
+	if (typeof repo === "string") {
+		candidates.push(getOverridesFile(repo));
+	} else {
+		candidates.push(getOverridesFile(repo), getLegacyOverridesFile(repo.repoName));
+	}
+	for (const file of candidates) {
+		try {
+			const content = await readFile(file, "utf8");
+			const parsed = JSON.parse(content) as RuntimeOverrides | undefined;
+			if (parsed) return normalizeOverrides(parsed);
+		} catch { /* try next */ }
+	}
 	return {};
 }
 
@@ -845,14 +892,15 @@ async function ensureInitialEmoji(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	overrides: RuntimeOverrides,
-	repoName: string,
+	repo: Pick<RepoInfo, "repoName" | "gitRoot" | "cwd"> | string,
 ): Promise<RuntimeOverrides> {
 	if (overrides.emoji) return overrides;
 	if (hasPersistedOverrides(ctx)) return overrides;
-	if (await exists(getOverridesFile(repoName))) return overrides;
+	const candidates: string[] = typeof repo === "string" ? [getOverridesFile(repo)] : [getOverridesFile(repo), getLegacyOverridesFile(repo.repoName)];
+	for (const f of candidates) if (await exists(f)) return overrides;
 
 	const nextOverrides = { ...overrides, emoji: pickRandomEmoji() };
-	saveOverrides(pi, nextOverrides, repoName);
+	saveOverrides(pi, nextOverrides, repo);
 	return nextOverrides;
 }
 
@@ -1123,7 +1171,7 @@ async function showSettingsPanel(
 		const FOOTER_LINE_ANIMATION_STEP_MS = 40;
 		let focusIndex = 0;
 		const autoAssignThemeOn = () => isAutoAssignThemeEnabled(currentConfig, overrides);
-		const themeRowEnabled = () => autoAssignThemeOn();
+		// Manual theme override now works regardless of autoAssign (decoupled in resolveTheme)
 		const footerLineSettings = () => resolveFooterLineSettings(repo, currentConfig, overrides);
 		const footerLineOn = () => footerLineSettings().enabled;
 		const footerLineAnimationOn = () => footerLineSettings().animationEnabled;
@@ -1147,7 +1195,6 @@ async function showSettingsPanel(
 		let stripeCustomCursor = 0;
 
 		function isVisibleFocusIndex(index: number): boolean {
-			if (!themeRowEnabled() && index === 1) return false;
 			if (!footerLineOn()) {
 				if (index >= 7 && index <= 11) return false;
 			}
@@ -1159,7 +1206,6 @@ async function showSettingsPanel(
 		}
 
 		function clampFocus() {
-			if (!themeRowEnabled() && focusIndex === 1) focusIndex = 0;
 			if (!footerLineOn()) {
 				if (focusIndex >= 7 && focusIndex <= 11) focusIndex = 6;
 			}
@@ -1246,16 +1292,10 @@ async function showSettingsPanel(
 			add(`${focusIndex === 0 ? theme.fg("accent", "▸") : " "} ${autoThemeCh} ${theme.fg("dim", "Auto-assign theme:")}${focusIndex === 0 ? theme.fg("dim", "  Enter/space to toggle") : ""}`);
 			lines.push("");
 
-			// 2. Theme
+			// 2. Theme — always enabled (manual override works without auto)
 			const tn = getThemeName();
-			const themeHint = themeRowEnabled() && focusIndex === 1
-				? theme.fg("dim", "  ← → browse")
-				: "";
-			if (themeRowEnabled()) {
-				add(`${cur(1, "▸")}${focusIndex === 1 ? "" : " "} ${theme.fg("dim", "Theme:")}  ${theme.fg("accent", "■")} ${tn}${themeHint}`);
-			} else {
-				add(`  ${theme.fg("dim", "Theme:")}  ${theme.fg("dim", "■")} ${theme.fg("dim", tn)}`);
-			}
+			const themeHint = focusIndex === 1 ? theme.fg("dim", "  ← → browse") : "";
+			add(`${cur(1, "▸")}${focusIndex === 1 ? "" : " "} ${theme.fg("dim", "Theme:")}  ${theme.fg("accent", "■")} ${tn}${themeHint}`);
 			const themeBrowseIdx = selectedThemeIdx !== -1 ? selectedThemeIdx : liveThemeIdx;
 			if (themeBrowseIdx !== -1) {
 				if (availableThemes.length === 1) {
@@ -1269,9 +1309,6 @@ async function showSettingsPanel(
 				add(`   ${theme.fg("warning", `Theme '${liveIdentity.theme}' is not currently installed.`)}`);
 			} else {
 				add(`   ${theme.fg("dim", "Current pi theme is preserved.")}`);
-			}
-			if (!themeRowEnabled()) {
-				add(`   ${theme.fg("dim", `Enable Auto-assign theme to browse ${availableThemes.length} installed themes.`)}`);
 			}
 			lines.push("");
 
@@ -1487,7 +1524,7 @@ async function showSettingsPanel(
 			if (matchesKey(data, Key.enter)) {
 				const trimmed = labelBuffer.trim();
 				if (trimmed) overrides.label = trimmed;
-				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+				onChange(overrides); saveOverrides(pi, overrides, repo);
 				labelText = overrides.label ?? labelText;
 				page = "settings"; refresh();
 				return;
@@ -1531,7 +1568,7 @@ async function showSettingsPanel(
 				} else {
 					overrides.footerLinePattern = undefined;
 				}
-				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+				onChange(overrides); saveOverrides(pi, overrides, repo);
 				page = "settings";
 				refresh();
 				return;
@@ -1572,7 +1609,7 @@ async function showSettingsPanel(
 				} else {
 					overrides.toolStripeChar = undefined;
 				}
-				onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+				onChange(overrides); saveOverrides(pi, overrides, repo);
 				page = "settings";
 				refresh();
 				return;
@@ -1611,7 +1648,7 @@ async function showSettingsPanel(
 				return;
 			}
 			if (matchesKey(data, Key.left)) {
-				if (focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) {
+				if (focusIndex === 1 && availableThemes.length > 0) {
 					selectedThemeIdx = selectedThemeIdx === -1
 						? availableThemes.length - 1
 						: (selectedThemeIdx - 1 + availableThemes.length) % availableThemes.length;
@@ -1635,15 +1672,15 @@ async function showSettingsPanel(
 					stripeCharIdx = (stripeCharIdx - 1 + STRIPE_CHARS.length) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
+				if ((focusIndex === 1 && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
 					onChange(overrides);
-					saveOverrides(pi, overrides, repo.repoName);
+					saveOverrides(pi, overrides, repo);
 				}
 				refresh();
 				return;
 			}
 			if (matchesKey(data, Key.right)) {
-				if (focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) {
+				if (focusIndex === 1 && availableThemes.length > 0) {
 					selectedThemeIdx = selectedThemeIdx === -1
 						? 0
 						: (selectedThemeIdx + 1) % availableThemes.length;
@@ -1667,9 +1704,9 @@ async function showSettingsPanel(
 					stripeCharIdx = (stripeCharIdx + 1) % STRIPE_CHARS.length;
 					overrides.toolStripeChar = STRIPE_CHARS[stripeCharIdx].char;
 				}
-				if ((focusIndex === 1 && themeRowEnabled() && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
+				if ((focusIndex === 1 && availableThemes.length > 0) || focusIndex === 7 || focusIndex === 8 || focusIndex === 11 || focusIndex === 13 || focusIndex === 14 || focusIndex === 15) {
 					onChange(overrides);
-					saveOverrides(pi, overrides, repo.repoName);
+					saveOverrides(pi, overrides, repo);
 				}
 				refresh();
 				return;
@@ -1677,12 +1714,9 @@ async function showSettingsPanel(
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 				if (focusIndex === 0) {
 					overrides.autoAssignTheme = !autoAssignThemeOn();
-					if (!overrides.autoAssignTheme) {
-						overrides.theme = undefined;
-						selectedThemeIdx = -1;
-					}
+					// Manual theme override is now independent of autoAssign — don't clear on toggle
 					clampFocus();
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); refresh();
 					return;
 				}
 				if (focusIndex === 2) {
@@ -1695,19 +1729,19 @@ async function showSettingsPanel(
 				if (focusIndex === 3) {
 					flags.showStatus = !flags.showStatus;
 					overrides.showStatus = flags.showStatus;
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); refresh();
 					return;
 				}
 				if (focusIndex === 4) {
 					flags.showBranch = !flags.showBranch;
 					overrides.showBranch = flags.showBranch;
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); refresh();
 					return;
 				}
 				if (focusIndex === 5) {
 					flags.showTitle = !flags.showTitle;
 					overrides.showTitle = flags.showTitle;
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); refresh();
 					return;
 				}
 				if (focusIndex === 6) {
@@ -1715,7 +1749,7 @@ async function showSettingsPanel(
 					if (!overrides.footerLine) {
 						overrides.footerLineColor = undefined;
 					}
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); refresh();
 					return;
 				}
 				if (focusIndex === 9 && footerLineOn()) {
@@ -1727,7 +1761,7 @@ async function showSettingsPanel(
 				}
 				if (focusIndex === 10 && footerLineOn()) {
 					overrides.footerLineAnimate = !footerLineAnimationOn();
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); clampFocus(); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); clampFocus(); refresh();
 					return;
 				}
 				if (focusIndex === 12) {
@@ -1737,7 +1771,7 @@ async function showSettingsPanel(
 						overrides.toolStripeChar = undefined;
 						overrides.toolStripeSide = undefined;
 					}
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); clampFocus(); refresh();
+					onChange(overrides); saveOverrides(pi, overrides, repo); clampFocus(); refresh();
 					return;
 				}
 				if (focusIndex === 16 && toolStripeOn()) {
@@ -1755,7 +1789,7 @@ async function showSettingsPanel(
 					return;
 				}
 				if (focusIndex === 18) {
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName); done();
+					onChange(overrides); saveOverrides(pi, overrides, repo); done();
 					return;
 				}
 				if (focusIndex === 19) {
@@ -1780,7 +1814,7 @@ async function showSettingsPanel(
 			if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
 				if (total > 0 && emojiCursorIdx < total) {
 					overrides.emoji = emoji[emojiCursorIdx];
-					onChange(overrides); saveOverrides(pi, overrides, repo.repoName);
+					onChange(overrides); saveOverrides(pi, overrides, repo);
 					copyEmoji(emoji[emojiCursorIdx]);
 					page = "settings";
 					focusIndex = 17; // back to emoji badge item
@@ -1985,11 +2019,7 @@ export default function (pi: ExtensionAPI) {
 
 	async function cmdTheme(args: string, ctx: ExtensionContext): Promise<void> {
 		const repo = await getRepoInfo(ctx.cwd);
-		const { config } = await loadConfig(repo, reportedConfigErrors, (m: string) => ctx.ui.notify(m, "warning"));
-		if (!isAutoAssignThemeEnabled(config, runtimeOverrides)) {
-			ctx.ui.notify("pi-peacock: enable Auto-assign theme in /peacock before using /peacock theme", "warning");
-			return;
-		}
+		// Manual theme override is now independent of autoAssign (decoupled in resolveTheme)
 
 		const availableThemes = getAvailableThemeNames(ctx);
 		availableThemeNames = availableThemes;
@@ -2008,7 +2038,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			runtimeOverrides.theme = name;
 		}
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		saveOverrides(pi, runtimeOverrides, repo);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: theme → ${formatThemeName(applied.identity.theme)}`, "info");
 	}
@@ -2022,7 +2052,8 @@ export default function (pi: ExtensionAPI) {
 		} else {
 			runtimeOverrides.label = label;
 		}
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		const repo = await getRepoInfo(ctx.cwd);
+		saveOverrides(pi, runtimeOverrides, repo);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: label → ${applied.identity.label}`, "info");
 	}
@@ -2041,7 +2072,8 @@ export default function (pi: ExtensionAPI) {
 			await showFullSettings(ctx);
 			return;
 		}
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		const repo = await getRepoInfo(ctx.cwd);
+		saveOverrides(pi, runtimeOverrides, repo);
 		await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: ${feature} → ${runtimeOverrides[validFeatures[feature]] ? "on" : "off"}`, "info");
 	}
@@ -2062,10 +2094,8 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		runtimeOverrides.autoAssignTheme = next;
-		if (!next) {
-			runtimeOverrides.theme = undefined;
-		}
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		// Manual theme is now independent — do not clear when disabling auto
+		saveOverrides(pi, runtimeOverrides, repo);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: auto-theme → ${next ? "on" : "off"} · ${formatThemeName(applied.identity.theme)}`, "info");
 	}
@@ -2075,7 +2105,8 @@ export default function (pi: ExtensionAPI) {
 		if (!ok) return;
 		runtimeOverrides = {};
 		lastSignature = "";
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		const repo = await getRepoInfo(ctx.cwd);
+		saveOverrides(pi, runtimeOverrides, repo);
 		const applied = await applyIdentity(ctx, true);
 		ctx.ui.notify(`pi-peacock: reset — using ${formatThemeName(applied.identity.theme)} (${applied.identity.source})`, "info");
 	}
@@ -2095,7 +2126,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
 			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		saveOverrides(pi, runtimeOverrides, repo);
 		await applyIdentity(ctx, true);
 	}
 
@@ -2105,7 +2136,7 @@ export default function (pi: ExtensionAPI) {
 		const identity = resolveIdentity(repo, config, runtimeOverrides);
 		await showSettingsPanel(pi, ctx, runtimeOverrides, config, identity, repo,
 			(n) => { runtimeOverrides = n; applyIdentity(ctx, true).catch(() => {}); });
-		saveOverrides(pi, runtimeOverrides, currentRepoName);
+		saveOverrides(pi, runtimeOverrides, repo);
 		await applyIdentity(ctx, true);
 	}
 
@@ -2185,10 +2216,14 @@ export default function (pi: ExtensionAPI) {
 	// ctx.ui.setTheme(ThemeInstance) applies the theme without persisting the
 	// name, so the next startup loads the user's previous base theme instead
 	// and pi-peacock re-applies the peacock theme normally.
+	// On pi@0.84.2, package themes declared in package.json pi.themes are
+	// discovered via DefaultResourceLoader before session_start, so
+	// resources_discover is retained only as fallback for `pi -e` and
+	// custom install paths.
 	let pendingThemeApply = false;
 
 	pi.on("resources_discover", async (_e, ctx) => {
-		const globalThemesDir = path.join(os.homedir(), ".pi", "agent", "themes");
+		const globalThemesDir = path.join(getAgentDir(), "themes");
 		if (THEMES_DIR === globalThemesDir) return undefined;
 
 		// If session_start already applied the theme (e.g. on resume where
@@ -2214,8 +2249,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_e, ctx) => {
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
-		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
-		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, repo);
+		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, repo);
 		lastSignature = "";
 		pendingThemeApply = false;
 
@@ -2238,8 +2273,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_tree", async (_e, ctx) => {
 		const repo = await getRepoInfo(ctx.cwd);
 		currentRepoName = repo.repoName;
-		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, currentRepoName);
-		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, currentRepoName);
+		runtimeOverrides = await restoreOverrides(ctx, reportedConfigErrors, repo);
+		runtimeOverrides = await ensureInitialEmoji(pi, ctx, runtimeOverrides, repo);
 		lastSignature = "";
 		await applyIdentity(ctx);
 	});

@@ -1,6 +1,6 @@
 {
   "name": "pi-peacock",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Peacock-style workspace coloring, repo badges, and terminal titles for pi coding agent",
   "type": "module",
   "license": "MIT",
@@ -32,7 +32,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions"
+      "./extensions/repo-peacock.ts"
     ],
     "themes": [
       "./themes"
